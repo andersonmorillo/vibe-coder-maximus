@@ -34,3 +34,19 @@ class FakeAgent:
 
     def close(self) -> None:
         self.closed = True
+
+
+class FakeTalkAgent(FakeAgent):
+    """Talk fake that writes the utterance into the apply spec (so --fake apply works)."""
+
+    def __init__(
+        self, spec_root: str, replies: list[str] | None = None
+    ) -> None:
+        super().__init__(replies=replies or ["Noted. Say apply when you want Cursor to edit."])
+        self._spec_root = spec_root
+
+    def send(self, prompt: str) -> Run:
+        from voice_cursor.spec import write_spec
+
+        write_spec(self._spec_root, prompt)
+        return super().send(prompt)

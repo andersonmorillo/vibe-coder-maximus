@@ -32,6 +32,32 @@ def test_prompt_passthrough():
     assert payload == "create a login endpoint"
 
 
+def test_apply_exact_phrases():
+    for heard in (
+        "apply",
+        "apply that",
+        "make the change",
+        "do it",
+        "go ahead",
+        "implement it",
+    ):
+        intent, extra = classify(heard)
+        assert intent is Intent.APPLY, heard
+        assert extra == ""
+
+
+def test_apply_with_trailing_instruction():
+    intent, extra = classify("apply rename foo to bar")
+    assert intent is Intent.APPLY
+    assert extra == "rename foo to bar"
+
+
+def test_wake_word_then_apply():
+    intent, extra = classify("hey cursor apply that", wake_word="hey cursor")
+    assert intent is Intent.APPLY
+    assert extra == ""
+
+
 def test_wake_word_required_then_stripped():
     intent, payload = classify(
         "hey cursor create a login endpoint",

@@ -28,6 +28,16 @@ def test_listen_once_returns_transcribed_speech(monkeypatch):
     assert stt.listen_once(timeout=1) == "hey cursor microphone test"
 
 
+def test_echo_live_rewrites_then_finalizes(capsys):
+    stt._echo_width = 0
+    stt.echo_live("hey")
+    stt.echo_live("hey cursor create a login", done=True)
+    out = capsys.readouterr().out
+    assert "you> hey" in out
+    assert "you> hey cursor create a login" in out
+    assert out.endswith("\n")
+
+
 def test_listen_once_times_out_when_silent(monkeypatch):
     class SilentListener:
         _error = None

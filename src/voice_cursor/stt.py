@@ -14,11 +14,15 @@ SPEECH_RMS = float(os.environ.get("VOICE_CURSOR_STT_THRESHOLD", "0.012"))
 SILENCE_TAIL_S = 1.2
 MAX_UTTERANCE_S = 30
 MIN_SPEECH_S = 0.4
-MODEL_SIZE = os.environ.get("VOICE_CURSOR_STT_MODEL", "tiny.en")
+MODEL_SIZE = os.environ.get("VOICE_CURSOR_STT_MODEL", "base.en")
 BLOCK_S = 0.05
+PARTIAL_EVERY_S = float(os.environ.get("VOICE_CURSOR_STT_PARTIAL_S", "0.8"))
 
 _model = None
 _model_lock = threading.Lock()
+_transcribe_lock = threading.Lock()
+_echo_lock = threading.Lock()
+_echo_width = 0
 
 
 def get_whisper_model():
@@ -44,8 +48,21 @@ def get_whisper_model():
 
 def transcribe_audio(audio) -> str:
     """Transcribe a float32 mono array at SAMPLE_RATE."""
-    segments, _ = get_whisper_model().transcribe(audio, language="en")
-    return " ".join(s.text.strip() for s in segments).strip()
+    with _transcribe_lock:
+        segments, _ = get_whisper_model().transcribe(audio, language="en")
+        return " ".join(s.text.strip() for s in segments).strip()
+
+
+def echo_live(text: str, *, done: bool = False) -> None:
+    """Rewrite the current terminal line with the in-progress transcript."""
+    global _echo_width
+    line = "you> " + " ".join(text.split())
+    with _echo_lock:
+        pad = max(_echo_width - len(line), 0)
+        _echo_width = len(line)
+        print("\r" + line + (" " * pad), end="\n" if done else "", flush=True)
+        if done:
+            _echo_width = 0
 
 
 class WhisperListener:
@@ -60,6 +77,7 @@ class WhisperListener:
         import sounddevice  # noqa: F401
 
         self.wake_word = wake_word
+        self.echoes_input = True
         self._q: Queue[str | None] = Queue()
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -102,6 +120,24 @@ class WhisperListener:
         chunks = list(prefix)
         silent = 0.0
         started = time.time()
+        last_partial = 0.0
+        partial_thread: threading.Thread | None = None
+        echo_live("…")
+
+        def _kick_partial(snap) -> None:
+            nonlocal partial_thread
+
+            def _run() -> None:
+                try:
+                    text = transcribe_audio(snap)
+                    if text and not self._stop.is_set():
+                        echo_live(text, done=False)
+                except Exception:
+                    pass
+
+            partial_thread = threading.Thread(target=_run, daemon=True)
+            partial_thread.start()
+
         while time.time() - started < MAX_UTTERANCE_S and not self._stop.is_set():
             data, _ = stream.read(block_n)
             mono = data[:, 0] if data.ndim > 1 else data
@@ -113,6 +149,16 @@ class WhisperListener:
                 silent += BLOCK_S
                 if silent >= SILENCE_TAIL_S:
                     break
+            now = time.time()
+            if now - last_partial >= PARTIAL_EVERY_S:
+                audio_so_far = np.concatenate(chunks)
+                if len(audio_so_far) >= SAMPLE_RATE * MIN_SPEECH_S and (
+                    partial_thread is None or not partial_thread.is_alive()
+                ):
+                    _kick_partial(audio_so_far.copy())
+                    last_partial = now
+        if partial_thread is not None:
+            partial_thread.join(timeout=2)
         if not chunks:
             return None
         audio = np.concatenate(chunks)
@@ -166,6 +212,7 @@ class WhisperListener:
                         continue
                     text = transcribe_audio(audio)
                     if text:
+                        echo_live(text, done=True)
                         self._q.put(text)
         except Exception as exc:
             print(f"voice-cursor: STT loop ended ({exc})")
@@ -197,6 +244,10 @@ def listen_once(*, timeout: float = 45) -> str:
             raise RuntimeError(listener._error or "speech recognition did not start")
         print("Input devices:", flush=True)
         print(describe_input_devices(), flush=True)
+        print(
+            f"Transcribing with faster-whisper {os.environ.get('VOICE_CURSOR_STT_MODEL', MODEL_SIZE)}.",
+            flush=True,
+        )
         print("Speak one short sentence now, then pause...", flush=True)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

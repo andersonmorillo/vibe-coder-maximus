@@ -16,6 +16,8 @@ class ListListener:
 class StdinListener:
     """Typed fallback. Sequential; barge-in is the mic listener's job."""
 
+    echoes_input = True
+
     def next_utterance(self) -> str | None:
         try:
             return input("you> ")

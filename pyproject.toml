@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 cursor = ["cursor-sdk"]
 voice = ["faster-whisper", "sounddevice", "numpy"]
+talk = ["mcp-agent[openai,anthropic]", "mcp<2"]
 dev = ["pytest"]
 
 [project.scripts]

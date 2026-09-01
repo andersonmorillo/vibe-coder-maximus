@@ -8,6 +8,7 @@ class Intent(Enum):
     CANCEL_RUN = "cancel_run"
     QUIET = "quiet"
     PROMPT = "prompt"
+    APPLY = "apply"
     IGNORE = "ignore"
 
 
@@ -24,6 +25,15 @@ _STOP = frozenset(
 )
 _CANCEL = frozenset({"cancel", "never mind", "nevermind"})
 _QUIET = frozenset({"be quiet", "silence", "shut up", "quiet"})
+# Longest first so "apply that" is not parsed as apply + "that".
+_APPLY = (
+    "make the change",
+    "implement it",
+    "apply that",
+    "go ahead",
+    "do it",
+    "apply",
+)
 
 
 def normalize(text: str) -> str:
@@ -68,4 +78,10 @@ def classify(
         return Intent.STOP_SESSION, payload
     if run_active and key in _CANCEL:
         return Intent.CANCEL_RUN, payload
+    for phrase in _APPLY:
+        if key == phrase:
+            return Intent.APPLY, ""
+        prefix = phrase + " "
+        if key.startswith(prefix):
+            return Intent.APPLY, key[len(prefix) :]
     return Intent.PROMPT, payload

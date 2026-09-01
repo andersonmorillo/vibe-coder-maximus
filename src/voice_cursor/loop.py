@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 from voice_cursor.commands import Intent, classify
 from voice_cursor.ports import MISSING, CodingAgent, Listener, Speaker
 from voice_cursor.session import Session
 from voice_cursor.speakable import speakable
+from voice_cursor.spec import read_spec, write_spec
 
 VOICE_INSTRUCTION = (
     "You are driven by a voice interface. Keep the final assistant message "
     "to 2-4 short spoken sentences. Put all code in files. Do not dump diffs "
     "or code fences in the reply."
+)
+
+APPLY_PROMPT = (
+    "Implement the change specified in .voice-cursor/request.md. "
+    "Put all code in files. Do not dump diffs or code fences in the reply. "
+    "Keep the final assistant message to 2-4 short spoken sentences."
 )
 
 _STOP = object()
@@ -59,6 +67,8 @@ def run_session(
     listener: Listener,
     speaker: Speaker,
     agent: CodingAgent,
+    talk: CodingAgent,
+    spec_root: str | Path = ".",
     wake_word: str = "",
 ) -> None:
     session = Session()
@@ -99,9 +109,26 @@ def run_session(
                 current.cancel()
                 _reap(current)
                 speaker.stop()
+            if intent is Intent.APPLY:
+                if payload:
+                    write_spec(spec_root, payload)
+                if not read_spec(spec_root):
+                    speaker.say("Nothing to apply.")
+                    heard = listener.next_utterance()
+                    continue
+                prompt = APPLY_PROMPT
+                worker: CodingAgent = agent
+                label = "cursor"
+            else:
+                prompt = payload
+                worker = talk
+                label = "talk"
             session.begin_run()
+            if not getattr(listener, "echoes_input", False):
+                print(f"you> {payload}", flush=True)
+            print(f"{label}> (working...)", flush=True)
             try:
-                current = agent.send(payload)
+                current = worker.send(prompt)
                 chunks: list[str] = []
                 barge = MISSING
                 for piece in current.iter_text():
@@ -189,3 +216,4 @@ def run_session(
         if closer is not None:
             closer()
         agent.close()
+        talk.close()

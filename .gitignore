@@ -28,6 +28,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+mcp_agent.secrets.yaml
+mcp_agent.config.yaml
 .cursor-api-key
 **/.cursor/api-key
 *.local

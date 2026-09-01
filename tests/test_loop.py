@@ -1,9 +1,110 @@
+from pathlib import Path
+
 from voice_cursor.fake import FakeAgent
 from voice_cursor.io import ListListener, RecordingSpeaker
 from voice_cursor.loop import run_session
+from voice_cursor.spec import read_spec, write_spec
 
 
-def test_agent_send_error_keeps_listening():
+def _run(*, listener, speaker, agent, talk, spec_root, wake_word=""):
+    run_session(
+        listener=listener,
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=spec_root,
+        wake_word=wake_word,
+    )
+
+
+def test_fake_talk_then_apply(tmp_path: Path):
+    from voice_cursor.fake import FakeTalkAgent
+
+    talk = FakeTalkAgent(spec_root=str(tmp_path), replies=["Saved. Say apply."])
+    agent = FakeAgent(replies=["Done."])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["create a login endpoint", "apply", "quit"]),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["create a login endpoint"]
+    assert read_spec(tmp_path) == "create a login endpoint"
+    assert len(agent.prompts) == 1
+    assert speaker.said == ["Saved. Say apply.", "Done."]
+    assert talk.closed and agent.closed
+
+
+def test_talk_does_not_call_coding_agent(tmp_path: Path):
+    talk = FakeAgent(replies=["Noted. Say apply when you want Cursor to edit."])
+    agent = FakeAgent(replies=["should not run"])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["create a login endpoint", "quit"]),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["create a login endpoint"]
+    assert agent.prompts == []
+    assert speaker.said == ["Noted. Say apply when you want Cursor to edit."]
+    assert talk.closed and agent.closed
+
+
+def test_apply_runs_coding_agent_once(tmp_path: Path):
+    write_spec(tmp_path, "add a login endpoint")
+    talk = FakeAgent(replies=["unused"])
+    agent = FakeAgent(replies=["Created the login endpoint."])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["apply", "quit"]),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == []
+    assert len(agent.prompts) == 1
+    assert ".voice-cursor/request.md" in agent.prompts[0]
+    assert speaker.said == ["Created the login endpoint."]
+
+
+def test_empty_apply_does_not_call_coding_agent(tmp_path: Path):
+    talk = FakeAgent()
+    agent = FakeAgent(replies=["should not run"])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["apply", "quit"]),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert agent.prompts == []
+    assert talk.prompts == []
+    assert speaker.said == ["Nothing to apply."]
+
+
+def test_apply_with_words_writes_spec(tmp_path: Path):
+    talk = FakeAgent()
+    agent = FakeAgent(replies=["Renamed it."])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["apply rename foo to bar", "quit"]),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert read_spec(tmp_path) == "rename foo to bar"
+    assert len(agent.prompts) == 1
+    assert speaker.said == ["Renamed it."]
+
+
+def test_agent_send_error_keeps_listening(tmp_path: Path):
     class Boom:
         def __init__(self) -> None:
             self.prompts: list[str] = []
@@ -16,19 +117,25 @@ def test_agent_send_error_keeps_listening():
         def close(self) -> None:
             self.closed = True
 
-    agent = Boom()
+    talk = Boom()
+    agent = FakeAgent()
     speaker = RecordingSpeaker()
-    run_session(
+    _run(
         listener=ListListener(["do the thing", "quit"]),
         speaker=speaker,
         agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
     )
-    assert agent.prompts == ["do the thing"]
+    assert talk.prompts == ["do the thing"]
+    assert agent.prompts == []
     assert speaker.said == ["The agent hit an error. Try again."]
-    assert agent.closed
+    assert talk.closed
 
 
-def test_run_status_error_is_spoken_not_partial():
+def test_run_status_error_is_spoken_not_partial(tmp_path: Path):
+    write_spec(tmp_path, "do a thing")
+
     class ErrRun:
         status = "error"
 
@@ -43,50 +150,64 @@ def test_run_status_error_is_spoken_not_partial():
 
     class ErrAgent:
         def __init__(self) -> None:
+            self.prompts: list[str] = []
             self.closed = False
 
         def send(self, prompt: str):
+            self.prompts.append(prompt)
             return ErrRun()
 
         def close(self) -> None:
             self.closed = True
 
     speaker = RecordingSpeaker()
-    run_session(
+    _run(
         listener=ListListener(["do it", "quit"]),
         speaker=speaker,
         agent=ErrAgent(),
+        talk=FakeAgent(),
+        spec_root=tmp_path,
     )
     assert speaker.said == ["The agent hit an error. Try again."]
 
 
-def test_two_turns_then_stop():
-    agent = FakeAgent(replies=["Created the login endpoint.", "Added JWT."])
+def test_two_talk_turns_then_stop(tmp_path: Path):
+    talk = FakeAgent(replies=["Let's plan the login.", "JWT next."])
+    agent = FakeAgent(replies=["should not run"])
     speaker = RecordingSpeaker()
-    listener = ListListener(
-        [
-            "create a login endpoint",
-            "now add JWT authentication",
-            "stop listening",
-        ]
+    _run(
+        listener=ListListener(
+            [
+                "create a login endpoint",
+                "now add JWT authentication",
+                "stop listening",
+            ]
+        ),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
     )
-    run_session(listener=listener, speaker=speaker, agent=agent)
-    assert agent.prompts == [
+    assert talk.prompts == [
         "create a login endpoint",
         "now add JWT authentication",
     ]
-    assert speaker.said == ["Created the login endpoint.", "Added JWT."]
-    assert agent.closed
+    assert agent.prompts == []
+    assert speaker.said == ["Let's plan the login.", "JWT next."]
 
 
-def test_stop_does_not_send_to_agent():
+def test_stop_does_not_send_to_agent(tmp_path: Path):
+    talk = FakeAgent()
     agent = FakeAgent()
     speaker = RecordingSpeaker()
-    run_session(
+    _run(
         listener=ListListener(["stop listening"]),
         speaker=speaker,
         agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
     )
+    assert talk.prompts == []
     assert agent.prompts == []
     assert speaker.said == []
 
@@ -111,42 +232,54 @@ class _PollListener:
         return self._polls.pop(0)
 
 
-def test_poll_cancel_does_not_speak_and_does_not_follow_up():
-    agent = FakeAgent(replies=["should not be spoken"])
+def test_poll_cancel_does_not_speak_and_does_not_follow_up(tmp_path: Path):
+    talk = FakeAgent(replies=["should not be spoken"])
+    agent = FakeAgent()
     speaker = RecordingSpeaker()
-    run_session(
+    _run(
         listener=_PollListener(lines=["first task", "quit"], polls=["cancel"]),
         speaker=speaker,
         agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
     )
-    assert agent.prompts == ["first task"]
+    assert talk.prompts == ["first task"]
+    assert agent.prompts == []
     assert speaker.said == []
 
 
-def test_poll_new_prompt_replaces_in_flight_run():
-    agent = FakeAgent(replies=["first", "second"])
+def test_poll_new_prompt_replaces_in_flight_run(tmp_path: Path):
+    talk = FakeAgent(replies=["first", "second"])
+    agent = FakeAgent()
     speaker = RecordingSpeaker()
-    run_session(
+    _run(
         listener=_PollListener(lines=["first task"], polls=["now add JWT"]),
         speaker=speaker,
         agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
     )
-    assert agent.prompts == ["first task", "now add JWT"]
+    assert talk.prompts == ["first task", "now add JWT"]
+    assert agent.prompts == []
     assert speaker.said == ["second"]
 
 
-def test_wake_word_filters_noise():
-    agent = FakeAgent(replies=["ok"])
+def test_wake_word_filters_noise(tmp_path: Path):
+    talk = FakeAgent(replies=["ok"])
+    agent = FakeAgent()
     speaker = RecordingSpeaker()
-    run_session(
+    _run(
         listener=ListListener(
             ["side conversation", "hey cursor make a file", "goodbye"]
         ),
         speaker=speaker,
         agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
         wake_word="hey cursor",
     )
-    assert agent.prompts == ["make a file"]
+    assert talk.prompts == ["make a file"]
+    assert agent.prompts == []
 
 
 class _StickySpeaker:
@@ -169,11 +302,19 @@ class _StickySpeaker:
         self._playing = False
 
 
-def test_barge_in_during_speech_cancels_without_waiting():
+def test_barge_in_during_speech_cancels_without_waiting(tmp_path: Path):
     listener = _PollListener(lines=["first task"], polls=[])
     speaker = _StickySpeaker(arm=lambda: listener._polls.append("cancel"))
-    agent = FakeAgent(replies=["long spoken answer"])
-    run_session(listener=listener, speaker=speaker, agent=agent)
-    assert agent.prompts == ["first task"]
+    talk = FakeAgent(replies=["long spoken answer"])
+    agent = FakeAgent()
+    _run(
+        listener=listener,
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["first task"]
+    assert agent.prompts == []
     assert speaker.said == ["long spoken answer"]
     assert speaker.stops >= 1

@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 
-from voice_cursor.fake import FakeAgent
 from voice_cursor.io import StdinListener, TeeSpeaker
 from voice_cursor.loop import run_session
 
@@ -14,8 +13,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="voice-cursor",
         description=(
-            "Voice loop around the Cursor CLI in this folder. "
-            "Uses `agent -p`, not the Python SDK and not Windows-MCP."
+            "Voice loop: mcp-agent for talk, Cursor CLI (`agent -p`) only on apply. "
+            "Not the Python SDK and not Windows-MCP."
         ),
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -30,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     start.add_argument(
         "--fake",
         action="store_true",
-        help="canned replies; no Cursor CLI (dry run)",
+        help="canned replies; no mcp-agent and no Cursor CLI (dry run)",
     )
     start.add_argument("--no-tts", action="store_true", help="print replies, do not speak")
     start.add_argument(
@@ -71,6 +70,9 @@ def start_session(args: argparse.Namespace) -> int:
         print(f"voice-cursor: cwd is not a directory: {cwd}", file=sys.stderr)
         return 1
     os.chdir(cwd)
+    from voice_cursor.envfile import load_cwd_dotenv
+
+    load_cwd_dotenv(cwd)
 
     use_text = bool(args.text or args.fake)
     voice = None
@@ -81,7 +83,10 @@ def start_session(args: argparse.Namespace) -> int:
     speaker = TeeSpeaker(voice)
 
     if args.fake:
+        from voice_cursor.fake import FakeAgent, FakeTalkAgent
+
         agent = FakeAgent()
+        talk = FakeTalkAgent(spec_root=str(cwd))
         listener = StdinListener()
     else:
         from voice_cursor.cursor_cli import (
@@ -126,10 +131,35 @@ def start_session(args: argparse.Namespace) -> int:
                 listener.close()
                 agent.close()
                 return 1
+            from voice_cursor.stt import MODEL_SIZE, describe_input_devices
+
+            print(
+                f"voice-cursor: transcribing with faster-whisper {MODEL_SIZE} "
+                "(not a Cursor model; mcp-agent talks, Cursor CLI runs on apply)",
+                flush=True,
+            )
+            print("Input devices:", flush=True)
+            print(describe_input_devices(), flush=True)
+            print(
+                "voice-cursor: listening — speak, then pause ~1s. "
+                "Talk is mcp-agent; say apply to run Cursor CLI.",
+                flush=True,
+            )
+        from voice_cursor.talk_mcp import McpTalkAgent
+
+        try:
+            talk = McpTalkAgent(cwd=str(cwd))
+        except Exception as exc:
+            print(f"voice-cursor: could not start mcp-agent talk ({exc})", file=sys.stderr)
+            closer = getattr(listener, "close", None)
+            if closer is not None:
+                closer()
+            agent.close()
+            return 1
 
     print(
-        f"voice-cursor: Cursor CLI in {cwd}  "
-        "(files stay on this PC; Ctrl+C or 'stop listening' to end)",
+        f"voice-cursor: session in {cwd}  "
+        "(talk: mcp-agent; apply: Cursor CLI; Ctrl+C or 'stop listening' to end)",
         flush=True,
     )
     try:
@@ -137,6 +167,8 @@ def start_session(args: argparse.Namespace) -> int:
             listener=listener,
             speaker=speaker,
             agent=agent,
+            talk=talk,
+            spec_root=cwd,
             wake_word=args.wake_word,
         )
     except KeyboardInterrupt:

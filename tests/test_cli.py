@@ -39,10 +39,23 @@ def test_missing_agent_cli_is_one(monkeypatch):
     assert main(["start", "--text", "--no-tts"]) == 1
 
 
-def test_unauthenticated_cli_is_one(monkeypatch):
+def test_missing_talk_key_is_one(monkeypatch, tmp_path):
     monkeypatch.setattr("voice_cursor.cursor_cli.find_agent_cli", lambda: "agent.exe")
-    monkeypatch.setattr("voice_cursor.cursor_cli.cli_authenticated", lambda _binary: False)
-    assert main(["start", "--text", "--no-tts"]) == 1
+    monkeypatch.setattr("voice_cursor.cursor_cli.cli_authenticated", lambda _binary: True)
+
+    class Dummy:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "voice_cursor.cursor_cli.CursorCliAgent",
+        lambda cwd, binary=None: Dummy(),
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("VOICE_CURSOR_HOME", str(tmp_path / "no-home"))
+    assert main(["start", "--text", "--no-tts", "--cwd", str(tmp_path)]) == 1
 
 
 def test_parse_cli_json_result_and_session():
