@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
 import threading
 from queue import Empty, Queue
 from typing import Iterator
@@ -18,25 +20,50 @@ from voice_cursor.spec import write_spec
 
 TALK_INSTRUCTION = (
     "You are a voice coding assistant. Keep replies to 2-4 short spoken "
-    "sentences. No code fences. If the user wants a code change, call "
+    "sentences. You may inspect repository files with read-only filesystem "
+    "tools, but never edit source files. The only write operation available "
+    "is write_change_spec, which records a handoff request. No code fences. "
+    "If the user wants a code change, call "
     "write_change_spec with a clear instruction for Cursor. Do not claim "
     "you edited the repo. The user must say apply to run Cursor CLI."
 )
 
-_WRITE_SPEC_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "write_change_spec",
-        "description": (
-            "Save a code-change request. The user must say apply before Cursor edits."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"text": {"type": "string"}},
-            "required": ["text"],
-        },
-    },
-}
+_READ_ONLY_FILESYSTEM_TOOLS = frozenset(
+    {
+        "read_text_file",
+        "read_media_file",
+        "read_multiple_files",
+        "list_directory",
+        "list_directory_with_sizes",
+        "directory_tree",
+        "search_files",
+        "get_file_info",
+        "list_allowed_directories",
+    }
+)
+
+
+def _filesystem_tool_allowed(name: str) -> bool:
+    return name == "write_change_spec" or (
+        name.startswith("filesystem_")
+        and name.removeprefix("filesystem_") in _READ_ONLY_FILESYSTEM_TOOLS
+    )
+
+
+def _mcp_result_text(result) -> str:
+    parts: list[str] = []
+    for item in getattr(result, "content", []):
+        text = getattr(item, "text", None)
+        if text is not None:
+            parts.append(str(text))
+            continue
+        model_dump = getattr(item, "model_dump", None)
+        if model_dump is not None:
+            parts.append(json.dumps(model_dump(), default=str))
+        else:
+            parts.append(str(item))
+    text = "\n".join(parts) or "Tool returned no content."
+    return f"Error: {text}" if getattr(result, "isError", False) else text
 
 
 def talk_key_present() -> bool:
@@ -130,6 +157,7 @@ class McpTalkAgent:
         self._loop = asyncio.new_event_loop()
         self._app_cm = None
         self._agent_cm = None
+        self._agent = None
         self._llm = None
         self._boot_err: BaseException | None = None
         self.agent_id = "mcp-agent-talk"
@@ -163,7 +191,13 @@ class McpTalkAgent:
         )
 
     async def _boot(self, MCPApp, Agent) -> None:
-        from mcp_agent.config import LoggerSettings, OpenAISettings, Settings
+        from mcp_agent.config import (
+            LoggerSettings,
+            MCPServerSettings,
+            MCPSettings,
+            OpenAISettings,
+            Settings,
+        )
 
         spec = talk_llm()
         kwargs: dict = {
@@ -186,16 +220,64 @@ class McpTalkAgent:
                     "X-Title": "voice-cursor",
                 }
             kwargs["openai"] = OpenAISettings(_env_file=None, **openai_kw)
+        repo = Path(self._cwd).resolve()
+        root_uri = repo.as_uri()
+        if os.name == "nt":
+            filesystem_command = "cmd"
+            filesystem_args = [
+                "/c",
+                "npx",
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                str(repo),
+            ]
+        else:
+            filesystem_command = "npx"
+            filesystem_args = [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                str(repo),
+            ]
+        kwargs["mcp"] = MCPSettings(
+            servers={
+                "filesystem": MCPServerSettings(
+                    name="repository-filesystem",
+                    description="Read-only access to the current repository.",
+                    command=filesystem_command,
+                    args=filesystem_args,
+                    cwd=str(repo),
+                    roots=[
+                        {
+                            "uri": root_uri,
+                            "name": "repository",
+                            "server_uri_alias": root_uri,
+                        }
+                    ],
+                    allowed_tools=set(_READ_ONLY_FILESYSTEM_TOOLS),
+                )
+            }
+        )
         settings = Settings(_env_file=None, **kwargs)
         app = MCPApp(name="voice-cursor-talk", settings=settings)
         self._app_cm = app.run()
         running = await self._app_cm.__aenter__()
-        agent = Agent(
+
+        class ReadOnlyAgent(Agent):
+            async def call_tool(self, name: str, arguments: dict | None = None):
+                if not _filesystem_tool_allowed(name):
+                    raise PermissionError(
+                        f"Filesystem tool '{name}' is disabled for the talk agent."
+                    )
+                return await super().call_tool(name, arguments)
+
+        agent = ReadOnlyAgent(
             name="talk",
             instruction=TALK_INSTRUCTION,
             functions=[self._write_change_spec],
+            server_names=["filesystem"],
             context=running.context,
         )
+        self._agent = agent
         self._agent_cm = agent
         await agent.__aenter__()
         if spec["provider"] == "openai":
@@ -247,6 +329,8 @@ class McpTalkAgent:
     async def _stream_openai(self, prompt: str, run: McpRun) -> None:
         from openai import AsyncOpenAI
 
+        if self._agent is None:
+            raise RuntimeError("mcp-agent talk is not started")
         spec = talk_llm()
         messages: list[dict] = [
             {"role": "system", "content": TALK_INSTRUCTION},
@@ -257,6 +341,19 @@ class McpTalkAgent:
         if spec["base_url"]:
             client_kw["base_url"] = spec["base_url"]
         model = spec["model"] or "openai/gpt-4o-mini"
+        tool_result = await self._agent.list_tools()
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "parameters": tool.inputSchema,
+                },
+            }
+            for tool in tool_result.tools
+        ]
+        tool_names = {tool["function"]["name"] for tool in tools}
         async with AsyncOpenAI(**client_kw) as client:
             for _ in range(5):
                 if run._cancelled:
@@ -266,7 +363,7 @@ class McpTalkAgent:
                 stream = await client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    tools=[_WRITE_SPEC_TOOL],
+                    tools=tools or None,
                     stream=True,
                     max_tokens=1024,
                 )
@@ -321,16 +418,19 @@ class McpTalkAgent:
                 )
                 for slot in tools_acc.values():
                     name = slot["name"]
-                    if "spec" in name:
-                        try:
-                            arg = json.loads(slot["args"] or "{}")
-                        except json.JSONDecodeError:
-                            arg = {"text": slot["args"]}
-                        result = self._write_change_spec(
-                            str(arg.get("text") or arg.get("instruction") or "")
-                        )
+                    if name not in tool_names or not _filesystem_tool_allowed(name):
+                        result = f"Tool '{name}' is not available."
                     else:
-                        result = "unknown tool"
+                        try:
+                            tool_args = json.loads(slot["args"] or "{}")
+                        except json.JSONDecodeError:
+                            result = f"Invalid JSON arguments for tool '{name}'."
+                        else:
+                            if not isinstance(tool_args, dict):
+                                result = f"Tool '{name}' requires an object of arguments."
+                            else:
+                                mcp_result = await self._agent.call_tool(name, tool_args)
+                                result = _mcp_result_text(mcp_result)
                     messages.append(
                         {
                             "role": "tool",

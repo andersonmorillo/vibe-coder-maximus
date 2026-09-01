@@ -3,7 +3,13 @@ import time
 
 import pytest
 
-from voice_cursor.talk_mcp import McpRun, McpTalkAgent, talk_key_present
+from voice_cursor.talk_mcp import (
+    McpRun,
+    McpTalkAgent,
+    _READ_ONLY_FILESYSTEM_TOOLS,
+    _filesystem_tool_allowed,
+    talk_key_present,
+)
 
 
 def test_talk_key_present_reads_env(monkeypatch):
@@ -13,6 +19,19 @@ def test_talk_key_present_reads_env(monkeypatch):
     assert talk_key_present() is False
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     assert talk_key_present() is True
+
+
+def test_filesystem_tool_allowlist_is_read_only():
+    assert "read_text_file" in _READ_ONLY_FILESYSTEM_TOOLS
+    assert _filesystem_tool_allowed("filesystem_read_text_file")
+    assert _filesystem_tool_allowed("write_change_spec")
+    assert not {
+        "write_file",
+        "edit_file",
+        "create_directory",
+        "move_file",
+    } & _READ_ONLY_FILESYSTEM_TOOLS
+    assert not _filesystem_tool_allowed("filesystem_write_file")
 
 
 def test_mcp_talk_missing_key_fails_fast(monkeypatch, tmp_path):

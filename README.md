@@ -11,7 +11,7 @@ This is not a GUI. It does not drive the Cursor IDE with Windows-MCP, and it doe
 
 ## Install
 
-Python 3.11+, a microphone, the Cursor CLI (`agent`), and a talk LLM key.
+Python 3.11+, Node.js/npm, a microphone, the Cursor CLI (`agent`), and a talk LLM key.
 
 ```powershell
 python -m pip install -e ".[dev,voice,talk]"
@@ -111,7 +111,9 @@ python -m voice_cursor start --cwd C:\path\to\project --device 6
 python -m voice_cursor doctor
 ```
 
-Talk replies come from mcp-agent. Cursor CLI runs only after `apply`. Replies are printed and spoken with Windows SAPI.
+Talk replies come from mcp-agent, which can inspect the target repository through
+read-only filesystem MCP tools. Cursor CLI runs only after `apply`; source files
+are not modified during talk turns. Replies are printed and spoken with Windows SAPI.
 
 ### Models (three different systems)
 
