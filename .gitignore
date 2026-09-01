@@ -1,0 +1,46 @@
+# Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+
+# Build and test output
+dist/
+build/
+*.cover
+.coverage
+.coverage.*
+htmlcov/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.cursor-api-key
+**/.cursor/api-key
+*.local
+*.pem
+*.key
+
+# Local logs
+*.log
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+/method

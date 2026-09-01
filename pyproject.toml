@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-cursor"
+version = "0.1.0"
+description = "Terminal voice loop around the Cursor coding agent"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+cursor = ["cursor-sdk"]
+voice = ["faster-whisper", "sounddevice", "numpy"]
+dev = ["pytest"]
+
+[project.scripts]
+voice-cursor = "voice_cursor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "real_mic: uses the real microphone and waits for spoken input",
+]

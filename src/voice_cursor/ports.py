@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+from typing import Iterator, Protocol
+
+# Sentinel: poll() found no utterance. Distinct from None (EOF).
+MISSING = object()
+
+
+class Run(Protocol):
+    def iter_text(self) -> Iterator[str]: ...
+    def wait(self) -> str: ...
+    def cancel(self) -> None: ...
+
+
+class CodingAgent(Protocol):
+    def send(self, prompt: str) -> Run: ...
+    def close(self) -> None: ...
+
+
+class Listener(Protocol):
+    def next_utterance(self) -> str | None: ...
+
+
+class Speaker(Protocol):
+    def say(self, text: str) -> None: ...
+    def stop(self) -> None: ...
