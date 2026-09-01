@@ -100,6 +100,22 @@ def talk_llm() -> dict[str, str]:
     return {"provider": "", "api_key": "", "base_url": "", "model": ""}
 
 
+def key_suffix(value: str) -> str:
+    v = (value or "").strip()
+    if len(v) < 4:
+        return "none"
+    return v[-4:]
+
+
+def talk_status_line() -> str:
+    spec = talk_llm()
+    if not spec["api_key"]:
+        return "talk: no key"
+    host = "openrouter" if "openrouter.ai" in (spec["base_url"] or "") else spec["provider"]
+    model = spec["model"] or "default"
+    return f"talk: {host} {model} (...{key_suffix(spec['api_key'])})"
+
+
 def apply_talk_credentials() -> dict[str, str]:
     """Point the OpenAI client at the resolved talk provider. Overwrites OPENAI_*."""
     spec = talk_llm()

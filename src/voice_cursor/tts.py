@@ -28,6 +28,15 @@ def _escape_ps(text: str) -> str:
     return text.replace("'", "''")
 
 
+def _sapi_command(text: str) -> str:
+    return (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        "$s.Rate = 2; "
+        f"$s.Speak('{_escape_ps(text)}')"
+    )
+
+
 class SapiSpeaker:
     """Windows SAPI via PowerShell. say() is non-blocking; stop() kills the child."""
 
@@ -42,13 +51,8 @@ class SapiSpeaker:
         if sys.platform != "win32":
             print(f"cursor> {text}")
             return
-        script = (
-            "Add-Type -AssemblyName System.Speech; "
-            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            f"$s.Speak('{_escape_ps(text)}')"
-        )
         self._proc = subprocess.Popen(
-            ["powershell", "-NoProfile", "-Command", script],
+            ["powershell", "-NoProfile", "-Command", _sapi_command(text)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

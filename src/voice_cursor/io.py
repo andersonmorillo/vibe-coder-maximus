@@ -30,7 +30,7 @@ class RecordingSpeaker:
         self.said: list[str] = []
         self.stops = 0
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, *, echo: bool = True) -> None:
         self.said.append(text)
 
     def stop(self) -> None:
@@ -52,8 +52,9 @@ class TeeSpeaker:
         self._print = PrintSpeaker()
         self._voice = voice
 
-    def say(self, text: str) -> None:
-        self._print.say(text)
+    def say(self, text: str, *, echo: bool = True) -> None:
+        if echo:
+            self._print.say(text)
         if self._voice is not None:
             self._voice.say(text)
 

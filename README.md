@@ -83,10 +83,11 @@ Or stay where you are and name the project:
 ```powershell
 voice-cursor start --cwd C:\path\to\your\project --wake-word "hey cursor"
 voice-cursor start --text --cwd C:\path\to\your\project
-voice-cursor listen-test
+voice-cursor listen-test --device 6
+voice-cursor doctor
 ```
 
-`--cwd` is the folder Cursor may edit on apply. Talk turns do not spawn `agent -p`. Apply turns resume the same Cursor CLI session (`--resume`).
+`--cwd` is the folder Cursor may edit on apply. Talk turns do not spawn `agent -p`. Apply turns resume the same Cursor CLI session (`--resume`). Before Cursor runs, the spec is printed and spoken.
 
 ## Run a session (from this repo)
 
@@ -106,7 +107,8 @@ python -m voice_cursor start --wake-word "hey cursor"
 Work in another folder:
 
 ```powershell
-python -m voice_cursor start --cwd C:\path\to\project
+python -m voice_cursor start --cwd C:\path\to\project --device 6
+python -m voice_cursor doctor
 ```
 
 Talk replies come from mcp-agent. Cursor CLI runs only after `apply`. Replies are printed and spoken with Windows SAPI.
@@ -117,7 +119,8 @@ Voice-to-text is **not** Cursor. It is [faster-whisper](https://github.com/SYSTR
 
 | Piece | Default | Override |
 | --- | --- | --- |
-| Speech-to-text | Whisper **`base.en`**, CPU, int8 | `$env:VOICE_CURSOR_STT_MODEL = "small.en"` (or `tiny.en`, `medium.en`) |
+| Speech-to-text | Whisper **`base.en`**, **CUDA float16 if a GPU is found**, else CPU int8 | `$env:VOICE_CURSOR_STT_DEVICE = "cpu"` or `"cuda"`; `$env:VOICE_CURSOR_STT_MODEL = "small.en"` |
+| Microphone | system default | `--device N` or `$env:VOICE_CURSOR_MIC_DEVICE = "N"` (`voice-cursor doctor` lists indexes) |
 | Talk | mcp-agent via OpenRouter (OpenAI-compatible) | `.env` `OPENROUTER_API_KEY` / `OPENROUTER_MODEL`; or `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 | Coding (apply only) | Cursor CLI default model for your account | `agent` / Cursor settings |
 | Text-to-speech | Windows SAPI (`System.Speech`) | none |
@@ -137,7 +140,7 @@ python -m voice_cursor start --fake --text
 | Input | Action |
 | --- | --- |
 | `stop listening`, `goodbye`, `exit`, `quit` | End the session |
-| `apply`, `apply that`, `make the change`, `do it`, `go ahead`, `implement it` | Write/use `.voice-cursor/request.md`, one Cursor CLI call |
+| `apply`, `applied`, `apply that`, `make the change`, `do it`, `go ahead`, `implement it` | Print/speak the spec, then one Cursor CLI call |
 | `apply rename foo to bar` | Write that instruction into the spec, then Cursor CLI |
 | `stop` while a run is active | Cancel the current run |
 | `cancel`, `never mind` | Cancel the current run |

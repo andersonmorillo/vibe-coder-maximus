@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from voice_cursor.envfile import load_dotenv, load_talk_env, talk_llm
+from voice_cursor.envfile import (
+    key_suffix,
+    load_dotenv,
+    load_talk_env,
+    talk_llm,
+    talk_status_line,
+)
 
 
 def test_load_dotenv_sets_missing_keys(tmp_path: Path, monkeypatch):
@@ -115,3 +121,16 @@ def test_apply_talk_credentials_overwrites_openai_key(monkeypatch):
     assert spec["api_key"] == "sk-or-v1-right"
     assert os.environ["OPENAI_API_KEY"] == "sk-or-v1-right"
     assert os.environ["OPENAI_BASE_URL"] == "https://openrouter.ai/api/v1"
+
+
+def test_talk_status_line_hides_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-abcdefghijklmnop")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_DEFAULT_MODEL", raising=False)
+    line = talk_status_line()
+    assert "abcdefghijklmnop" not in line
+    assert "...mnop" in line
+    assert "openrouter" in line
+    assert key_suffix("sk-or-v1-abcdefghijklmnop") == "mnop"

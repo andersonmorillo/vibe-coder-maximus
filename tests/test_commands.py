@@ -32,6 +32,23 @@ def test_prompt_passthrough():
     assert payload == "create a login endpoint"
 
 
+def test_apply_whisper_near_misses():
+    for heard in ("applied", "applying", "Apply.", "go a head"):
+        intent, extra = classify(heard)
+        assert intent is Intent.APPLY, heard
+        assert extra == ""
+
+
+def test_apply_does_not_steal_reply_or_supply():
+    assert classify("reply with a summary")[0] is Intent.PROMPT
+    assert classify("supply a login form")[0] is Intent.PROMPT
+
+
+def test_stop_listening_fuzzy():
+    assert classify("stop listening!")[0] is Intent.STOP_SESSION
+    assert classify("stopped listening")[0] is Intent.STOP_SESSION
+
+
 def test_apply_exact_phrases():
     for heard in (
         "apply",

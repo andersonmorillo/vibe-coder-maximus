@@ -13,6 +13,15 @@ def test_start_help_exits_zero():
         raise AssertionError("expected SystemExit from --help")
 
 
+def test_doctor_help_exits_zero():
+    try:
+        main(["doctor", "--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+    else:
+        raise AssertionError("expected SystemExit from --help")
+
+
 def test_listen_test_help_exits_zero():
     try:
         main(["listen-test", "--help"])
@@ -24,7 +33,8 @@ def test_listen_test_help_exits_zero():
 
 def test_listen_test_prints_heard(monkeypatch, capsys):
     monkeypatch.setattr(
-        "voice_cursor.stt.listen_once", lambda timeout=45: "hey cursor microphone test"
+        "voice_cursor.stt.listen_once",
+        lambda timeout=45, device=None: "hey cursor microphone test",
     )
     assert main(["listen-test"]) == 0
     assert "hey cursor microphone test" in capsys.readouterr().out

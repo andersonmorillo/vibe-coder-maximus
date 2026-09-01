@@ -23,26 +23,104 @@ _model_lock = threading.Lock()
 _transcribe_lock = threading.Lock()
 _echo_lock = threading.Lock()
 _echo_width = 0
+_resolved: tuple[str, str, str] | None = None
+
+
+def cuda_device_count() -> int:
+    try:
+        from ctranslate2 import get_cuda_device_count
+
+        return int(get_cuda_device_count() or 0)
+    except Exception:
+        return 0
+
+
+def resolve_stt_device(
+    cuda_count: int | None = None, override: str | None = None
+) -> tuple[str, str]:
+    """Whisper device + compute type. CUDA float16 when a GPU is there."""
+    raw = (
+        os.environ.get("VOICE_CURSOR_STT_DEVICE", "")
+        if override is None
+        else override
+    ).strip()
+    compute_ov = os.environ.get("VOICE_CURSOR_STT_COMPUTE", "").strip()
+    o = raw.lower()
+    if o in ("cpu",):
+        return "cpu", compute_ov or "int8"
+    if o in ("cuda", "gpu") or o.startswith("cuda:"):
+        return ("cuda" if o in ("cuda", "gpu") else raw), compute_ov or "float16"
+    n = cuda_device_count() if cuda_count is None else cuda_count
+    if n > 0:
+        return "cuda", compute_ov or "float16"
+    return "cpu", compute_ov or "int8"
+
+
+def stt_model_name() -> str:
+    return os.environ.get("VOICE_CURSOR_STT_MODEL", MODEL_SIZE)
+
+
+def mic_device_index(override: int | None = None) -> int | None:
+    if override is not None:
+        return override
+    raw = os.environ.get("VOICE_CURSOR_MIC_DEVICE", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def runtime_summary() -> str:
+    model = stt_model_name()
+    if _resolved is not None:
+        device, compute, loaded = _resolved
+        return f"faster-whisper {loaded} on {device} ({compute})"
+    device, compute = resolve_stt_device()
+    return f"faster-whisper {model} on {device} ({compute})"
+
+
+def mic_muted() -> bool:
+    """Drop capture while TTS is playing so the speaker is not transcribed."""
+    try:
+        from voice_cursor.tts import is_speaking
+
+        return is_speaking()
+    except Exception:
+        return False
 
 
 def get_whisper_model():
     """One WhisperModel per process. Reloading per utterance is too slow for a loop."""
-    global _model
+    global _model, _resolved
     with _model_lock:
         if _model is None:
             from faster_whisper import WhisperModel
 
-            size = os.environ.get("VOICE_CURSOR_STT_MODEL", MODEL_SIZE)
-            device = os.environ.get("VOICE_CURSOR_STT_DEVICE", "cpu")
-            compute = "int8" if device == "cpu" else "float16"
+            size = stt_model_name()
+            device, compute = resolve_stt_device()
             cache = os.environ.get(
                 "VOICE_CURSOR_STT_CACHE",
                 str(Path.home() / ".voice-cursor" / "whisper"),
             )
             Path(cache).mkdir(parents=True, exist_ok=True)
-            _model = WhisperModel(
-                size, device=device, compute_type=compute, download_root=cache
-            )
+            try:
+                _model = WhisperModel(
+                    size, device=device, compute_type=compute, download_root=cache
+                )
+                _resolved = (device, compute, size)
+            except Exception:
+                if device == "cpu":
+                    raise
+                print(
+                    f"voice-cursor: Whisper {size} failed on {device}, using CPU int8",
+                    flush=True,
+                )
+                _model = WhisperModel(
+                    size, device="cpu", compute_type="int8", download_root=cache
+                )
+                _resolved = ("cpu", "int8", size)
         return _model
 
 
@@ -72,11 +150,12 @@ class WhisperListener:
     Source pattern: https://github.com/0pen-Sourcer/Hearth/blob/main/hearth/listen.py
     """
 
-    def __init__(self, wake_word: str = "") -> None:
+    def __init__(self, wake_word: str = "", device: int | None = None) -> None:
         import faster_whisper  # noqa: F401 — fail fast if extras missing
         import sounddevice  # noqa: F401
 
         self.wake_word = wake_word
+        self.device = mic_device_index(device)
         self.echoes_input = True
         self._q: Queue[str | None] = Queue()
         self._stop = threading.Event()
@@ -141,6 +220,11 @@ class WhisperListener:
         while time.time() - started < MAX_UTTERANCE_S and not self._stop.is_set():
             data, _ = stream.read(block_n)
             mono = data[:, 0] if data.ndim > 1 else data
+            if mic_muted():
+                silent += BLOCK_S
+                if silent >= SILENCE_TAIL_S:
+                    break
+                continue
             chunks.append(mono.copy())
             rms = float((mono**2).mean() ** 0.5)
             if rms > SPEECH_RMS:
@@ -183,7 +267,11 @@ class WhisperListener:
         tail: deque = deque(maxlen=8)
         try:
             with sd.InputStream(
-                samplerate=SAMPLE_RATE, channels=1, dtype="float32", blocksize=block_n
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+                blocksize=block_n,
+                device=self.device,
             ) as stream:
                 while not self._stop.is_set():
                     data, _ = stream.read(block_n)
@@ -195,14 +283,10 @@ class WhisperListener:
                     else:
                         run = 0
                         continue
-                    try:
-                        from voice_cursor.tts import is_speaking
-
-                        if is_speaking() and rms < SPEECH_RMS * 5:
-                            run = 0
-                            continue
-                    except Exception:
-                        pass
+                    if mic_muted():
+                        run = 0
+                        tail.clear()
+                        continue
                     if run < 4:
                         continue
                     run = 0
@@ -219,35 +303,38 @@ class WhisperListener:
             self._q.put(None)
 
 
-def describe_input_devices() -> str:
+def describe_input_devices(selected: int | None = None) -> str:
     import sounddevice as sd
 
     default = sd.default.device
     default_in = default[0] if isinstance(default, (list, tuple)) else default
+    pick = mic_device_index(selected)
     lines: list[str] = []
     for i, device in enumerate(sd.query_devices()):
         if int(device["max_input_channels"] or 0) <= 0:
             continue
-        mark = " (default)" if i == default_in else ""
+        marks = []
+        if i == default_in:
+            marks.append("default")
+        if pick is not None and i == pick:
+            marks.append("selected")
+        mark = f" ({', '.join(marks)})" if marks else ""
         lines.append(f"  [{i}] {device['name']}{mark}")
     return "\n".join(lines) or "  (no input devices)"
 
 
-def listen_once(*, timeout: float = 45) -> str:
+def listen_once(*, timeout: float = 45, device: int | None = None) -> str:
     """Open the real mic, wait for one transcribed utterance, then close.
 
     Raises RuntimeError if STT cannot start, TimeoutError if nothing is heard.
     """
-    listener = WhisperListener()
+    listener = WhisperListener(device=device)
     try:
         if not listener.wait_ready(timeout=180):
             raise RuntimeError(listener._error or "speech recognition did not start")
         print("Input devices:", flush=True)
-        print(describe_input_devices(), flush=True)
-        print(
-            f"Transcribing with faster-whisper {os.environ.get('VOICE_CURSOR_STT_MODEL', MODEL_SIZE)}.",
-            flush=True,
-        )
+        print(describe_input_devices(device), flush=True)
+        print(f"Transcribing with {runtime_summary()}.", flush=True)
         print("Speak one short sentence now, then pause...", flush=True)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

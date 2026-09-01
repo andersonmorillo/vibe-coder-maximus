@@ -33,7 +33,7 @@ def test_fake_talk_then_apply(tmp_path: Path):
     assert talk.prompts == ["create a login endpoint"]
     assert read_spec(tmp_path) == "create a login endpoint"
     assert len(agent.prompts) == 1
-    assert speaker.said == ["Saved. Say apply.", "Done."]
+    assert speaker.said == ["Saved. Say apply.", "Applying. create a login endpoint", "Done."]
     assert talk.closed and agent.closed
 
 
@@ -69,7 +69,7 @@ def test_apply_runs_coding_agent_once(tmp_path: Path):
     assert talk.prompts == []
     assert len(agent.prompts) == 1
     assert ".voice-cursor/request.md" in agent.prompts[0]
-    assert speaker.said == ["Created the login endpoint."]
+    assert speaker.said == ["Applying. add a login endpoint", "Created the login endpoint."]
 
 
 def test_empty_apply_does_not_call_coding_agent(tmp_path: Path):
@@ -101,7 +101,7 @@ def test_apply_with_words_writes_spec(tmp_path: Path):
     )
     assert read_spec(tmp_path) == "rename foo to bar"
     assert len(agent.prompts) == 1
-    assert speaker.said == ["Renamed it."]
+    assert speaker.said == ["Applying. rename foo to bar", "Renamed it."]
 
 
 def test_agent_send_error_keeps_listening(tmp_path: Path):
@@ -168,7 +168,10 @@ def test_run_status_error_is_spoken_not_partial(tmp_path: Path):
         talk=FakeAgent(),
         spec_root=tmp_path,
     )
-    assert speaker.said == ["The agent hit an error. Try again."]
+    assert speaker.said == [
+        "Applying. do a thing",
+        "The agent hit an error. Try again.",
+    ]
 
 
 def test_two_talk_turns_then_stop(tmp_path: Path):

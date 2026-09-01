@@ -38,6 +38,13 @@ def _playing(speaker: Speaker) -> bool:
     return bool(playing()) if playing else False
 
 
+def _speak(speaker: Speaker, text: str, *, echo: bool = True) -> None:
+    try:
+        speaker.say(text, echo=echo)  # type: ignore[call-arg]
+    except TypeError:
+        speaker.say(text)
+
+
 def _reap(run) -> None:
     if run is None:
         return
@@ -112,10 +119,14 @@ def run_session(
             if intent is Intent.APPLY:
                 if payload:
                     write_spec(spec_root, payload)
-                if not read_spec(spec_root):
+                spec_text = read_spec(spec_root)
+                if not spec_text:
                     speaker.say("Nothing to apply.")
                     heard = listener.next_utterance()
                     continue
+                preview = spec_text if len(spec_text) <= 240 else spec_text[:237] + "..."
+                print(f"apply> {spec_text}", flush=True)
+                speaker.say(f"Applying. {preview}")
                 prompt = APPLY_PROMPT
                 worker: CodingAgent = agent
                 label = "cursor"
@@ -131,11 +142,17 @@ def run_session(
                 current = worker.send(prompt)
                 chunks: list[str] = []
                 barge = MISSING
+                streamed = False
                 for piece in current.iter_text():
-                    chunks.append(piece)
+                    if piece:
+                        print(piece, end="", flush=True)
+                        streamed = True
+                        chunks.append(piece)
                     barge = _poll(listener)
                     if barge is not MISSING:
                         break
+                if streamed:
+                    print(flush=True)
             except Exception as exc:
                 print(f"voice-cursor: agent error ({exc})", file=sys.stderr)
                 if current is not None:
@@ -184,7 +201,7 @@ def run_session(
             session.begin_speak()
             spoken = speakable(final)
             if spoken:
-                speaker.say(spoken)
+                _speak(speaker, spoken, echo=not streamed)
             speak_barge = MISSING
             while _playing(speaker):
                 speak_barge = _poll(listener)
