@@ -11,7 +11,7 @@ from voice_cursor.ports import MISSING
 
 SAMPLE_RATE = 16000
 SPEECH_RMS = float(os.environ.get("VOICE_CURSOR_STT_THRESHOLD", "0.012"))
-SILENCE_TAIL_S = 1.2
+SILENCE_TAIL_S = 2.5
 MAX_UTTERANCE_S = 30
 MIN_SPEECH_S = 0.4
 MODEL_SIZE = os.environ.get("VOICE_CURSOR_STT_MODEL", "base.en")
