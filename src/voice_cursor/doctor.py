@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -13,6 +14,11 @@ from voice_cursor.envfile import (
     load_talk_env,
     talk_llm,
     talk_status_line,
+)
+from voice_cursor.firstmate import (
+    primary_session_name,
+    resolve_firstmate_home,
+    resolve_firstmate_root,
 )
 from voice_cursor.stt import cuda_device_count, resolve_stt_device, runtime_summary, stt_model_name
 
@@ -60,6 +66,19 @@ def doctor_lines(cwd: str | Path) -> list[str]:
         lines.append("agent login: " + ("ok" if logged else "not logged in"))
     else:
         lines.append("agent cli: missing")
+    try:
+        firstmate_root = resolve_firstmate_root(cwd=cwd)
+    except RuntimeError as exc:
+        lines.append(f"firstmate: unavailable ({exc})")
+    else:
+        firstmate_home = resolve_firstmate_home(firstmate_root)
+        session = primary_session_name(firstmate_root, firstmate_home)
+        lines.append(f"firstmate root: {firstmate_root}")
+        lines.append(f"firstmate home: {firstmate_home}")
+        lines.append(
+            "firstmate tmux: " + ("ok" if shutil.which("tmux") else "missing")
+        )
+        lines.append(f"firstmate session: {session}")
     mic = os.environ.get("VOICE_CURSOR_MIC_DEVICE", "").strip() or "default"
     lines.append(f"mic device: {mic}")
     try:

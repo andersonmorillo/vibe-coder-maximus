@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+from voice_cursor.firstmate import FirstmateAgent
 from voice_cursor.io import StdinListener, TeeSpeaker
 from voice_cursor.loop import run_session
 
@@ -13,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="voice-cursor",
         description=(
-            "Voice loop: mcp-agent for talk, Cursor CLI (`agent -p`) only on apply. "
+            "Voice loop: mcp-agent for talk, Firstmate handles apply by default. "
             "Not the Python SDK and not Windows-MCP."
         ),
     )
@@ -30,12 +31,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     doctor = sub.add_parser(
         "doctor",
-        help="check talk key, CUDA Whisper, mic, and Cursor CLI",
+        help="check talk key, CUDA Whisper, mic, and coding engine",
     )
     doctor.add_argument("--cwd", default=".", help="workspace to load .env from")
     start = sub.add_parser("start", help="start a session")
     start.add_argument("--text", action="store_true", help="type instead of the mic")
     start.add_argument("--cwd", default=".", help="local workspace the agent may edit")
+    start.add_argument(
+        "--engine",
+        choices=("firstmate", "cursor"),
+        default="firstmate",
+        help="coding engine (default: firstmate)",
+    )
+    start.add_argument(
+        "--firstmate-root",
+        default="",
+        help="Firstmate checkout to launch (or VOICE_CURSOR_FIRSTMATE_ROOT)",
+    )
+    start.add_argument(
+        "--firstmate-home",
+        default="",
+        help="Firstmate operational home (or VOICE_CURSOR_FIRSTMATE_HOME/FM_HOME)",
+    )
+    start.add_argument(
+        "--firstmate-session",
+        default="",
+        help="tmux session name for the Firstmate primary",
+    )
+    start.add_argument(
+        "--primary-model",
+        default="",
+        help="Cursor model for the Firstmate primary",
+    )
     start.add_argument("--wake-word", default="", help='optional prefix, e.g. "hey cursor"')
     start.add_argument(
         "--device",
@@ -52,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     start.add_argument(
         "--agent-bin",
         default="",
-        help="path to the Cursor CLI `agent` binary (else PATH / ~/.local/bin)",
+        help="path to the Cursor CLI used by the selected engine",
     )
     args = parser.parse_args(argv)
     if args.cmd == "listen-test":
@@ -85,15 +112,22 @@ def run_listen_test(*, device: int | None = None) -> int:
     return 0
 
 
-def _boot_status(cwd: Path, *, fake: bool) -> None:
+def _boot_status(cwd: Path, *, fake: bool, engine: str) -> None:
     from voice_cursor.envfile import talk_status_line
     from voice_cursor.stt import runtime_summary
 
     extra = "fake" if fake else runtime_summary()
     print(f"voice-cursor: {talk_status_line()}  stt: {extra}", flush=True)
+    if fake:
+        apply_target = "dry run"
+    elif engine == "firstmate":
+        apply_target = "Firstmate inbox"
+    else:
+        apply_target = "Cursor CLI"
     print(
         f"voice-cursor: session in {cwd}  "
-        "(talk: mcp-agent; apply: Cursor CLI; Ctrl+C or 'stop listening' to end)",
+        f"(talk: mcp-agent; apply: {apply_target}; "
+        "Ctrl+C or 'stop listening' to end)",
         flush=True,
     )
 
@@ -116,12 +150,31 @@ def start_session(args: argparse.Namespace) -> int:
         voice = SapiSpeaker()
     speaker = TeeSpeaker(voice)
 
+    engine = getattr(args, "engine", "firstmate")
+    apply_target = "Firstmate" if engine == "firstmate" else "Cursor CLI"
     if args.fake:
         from voice_cursor.fake import FakeAgent, FakeTalkAgent
 
         agent = FakeAgent()
         talk = FakeTalkAgent(spec_root=str(cwd))
         listener = StdinListener()
+    elif engine == "firstmate":
+        try:
+            agent = FirstmateAgent(
+                cwd=str(cwd),
+                firstmate_root=args.firstmate_root,
+                firstmate_home=args.firstmate_home,
+                session=args.firstmate_session,
+                binary=args.agent_bin or None,
+                model=args.primary_model or None,
+            )
+        except Exception as exc:
+            print(
+                f"voice-cursor: could not configure Firstmate ({exc})",
+                file=sys.stderr,
+            )
+            return 1
+        talk = None
     else:
         from voice_cursor.cursor_cli import (
             CursorCliAgent,
@@ -143,6 +196,8 @@ def start_session(args: argparse.Namespace) -> int:
         except Exception as exc:
             print(f"voice-cursor: could not start Cursor CLI ({exc})", file=sys.stderr)
             return 1
+
+    if not args.fake:
         if use_text:
             listener = StdinListener()
         else:
@@ -171,20 +226,23 @@ def start_session(args: argparse.Namespace) -> int:
 
             print(
                 f"voice-cursor: transcribing with {runtime_summary()} "
-                "(not a Cursor model; mcp-agent talks, Cursor CLI runs on apply)",
+                f"(not a Cursor model; mcp-agent talks, {apply_target} handles apply)",
                 flush=True,
             )
             print("Input devices:", flush=True)
             print(describe_input_devices(args.device), flush=True)
             print(
                 "voice-cursor: listening — speak, then pause ~1s. "
-                "Talk is mcp-agent; say apply to run Cursor CLI.",
+                f"Talk is mcp-agent; say apply to use {apply_target}.",
                 flush=True,
             )
         from voice_cursor.talk_mcp import McpTalkAgent
 
         try:
-            talk = McpTalkAgent(cwd=str(cwd))
+            talk = McpTalkAgent(
+                cwd=str(cwd),
+                handoff_target="Firstmate" if engine == "firstmate" else "Cursor",
+            )
         except Exception as exc:
             print(f"voice-cursor: could not start mcp-agent talk ({exc})", file=sys.stderr)
             closer = getattr(listener, "close", None)
@@ -193,7 +251,24 @@ def start_session(args: argparse.Namespace) -> int:
             agent.close()
             return 1
 
-    _boot_status(cwd, fake=bool(args.fake))
+    if engine == "firstmate" and not args.fake:
+        try:
+            agent.start()
+        except Exception as exc:
+            print(
+                f"voice-cursor: could not launch Firstmate ({exc})",
+                file=sys.stderr,
+            )
+            closer = getattr(listener, "close", None)
+            if closer is not None:
+                closer()
+            if talk is not None:
+                talk.close()
+            agent.close()
+            return 1
+        print(f"voice-cursor: {agent.startup_message}", flush=True)
+
+    _boot_status(cwd, fake=bool(args.fake), engine=engine)
     try:
         run_session(
             listener=listener,

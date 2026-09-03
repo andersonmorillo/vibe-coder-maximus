@@ -37,12 +37,14 @@ class FakeAgent:
 
 
 class FakeTalkAgent(FakeAgent):
-    """Talk fake that writes the utterance into the apply spec (so --fake apply works)."""
+    """Talk fake that writes the utterance into the apply spec."""
 
     def __init__(
         self, spec_root: str, replies: list[str] | None = None
     ) -> None:
-        super().__init__(replies=replies or ["Noted. Say apply when you want Cursor to edit."])
+        super().__init__(
+            replies=replies or ["Noted. Say apply when you want Firstmate to handle it."]
+        )
         self._spec_root = spec_root
 
     def send(self, prompt: str) -> Run:

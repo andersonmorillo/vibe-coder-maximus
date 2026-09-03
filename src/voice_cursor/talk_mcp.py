@@ -18,15 +18,20 @@ from typing import Iterator
 from voice_cursor.envfile import apply_talk_credentials, load_cwd_dotenv, talk_llm
 from voice_cursor.spec import write_spec
 
-TALK_INSTRUCTION = (
-    "You are a voice coding assistant. Keep replies to 2-4 short spoken "
-    "sentences. You may inspect repository files with read-only filesystem "
-    "tools, but never edit source files. The only write operation available "
-    "is write_change_spec, which records a handoff request. No code fences. "
-    "If the user wants a code change, call "
-    "write_change_spec with a clear instruction for Cursor. Do not claim "
-    "you edited the repo. The user must say apply to run Cursor CLI."
-)
+def talk_instruction(handoff_target: str = "Firstmate") -> str:
+    return (
+        "You are a voice coding assistant. Keep replies to 2-4 short spoken "
+        "sentences. You may inspect repository files with read-only filesystem "
+        "tools, but never edit source files. The only write operation available "
+        "is write_change_spec, which records a handoff request. No code fences. "
+        "If the user wants a code change, call "
+        f"write_change_spec with a clear instruction for {handoff_target}. "
+        "Do not claim you edited the repo. The user must say apply to hand it "
+        f"to {handoff_target}."
+    )
+
+
+TALK_INSTRUCTION = talk_instruction()
 
 _READ_ONLY_FILESYSTEM_TOOLS = frozenset(
     {
@@ -142,7 +147,7 @@ class McpRun:
 class McpTalkAgent:
     """mcp-agent Agent + streaming OpenAI-compatible talk. May write only the spec file."""
 
-    def __init__(self, cwd: str) -> None:
+    def __init__(self, cwd: str, handoff_target: str = "Firstmate") -> None:
         load_cwd_dotenv(cwd)
         apply_talk_credentials()
         if not talk_key_present():
@@ -153,6 +158,8 @@ class McpTalkAgent:
         except ImportError as exc:
             raise RuntimeError(install_hint()) from exc
         self._cwd = cwd
+        self._handoff_target = handoff_target
+        self._instruction = talk_instruction(handoff_target)
         self._history: list[dict] = []
         self._loop = asyncio.new_event_loop()
         self._app_cm = None
@@ -183,11 +190,11 @@ class McpTalkAgent:
         self._loop.run_forever()
 
     def _write_change_spec(self, text: str) -> str:
-        """Save a code-change request. User must say apply to run Cursor."""
+        """Save a code-change request for the selected coding engine."""
         write_spec(self._cwd, text)
         return (
             "Spec saved. Tell the user to say apply when they want "
-            "Cursor to edit the project."
+            f"{self._handoff_target} to handle the project."
         )
 
     async def _boot(self, MCPApp, Agent) -> None:
@@ -272,7 +279,7 @@ class McpTalkAgent:
 
         agent = ReadOnlyAgent(
             name="talk",
-            instruction=TALK_INSTRUCTION,
+            instruction=self._instruction,
             functions=[self._write_change_spec],
             server_names=["filesystem"],
             context=running.context,
@@ -333,7 +340,7 @@ class McpTalkAgent:
             raise RuntimeError("mcp-agent talk is not started")
         spec = talk_llm()
         messages: list[dict] = [
-            {"role": "system", "content": TALK_INSTRUCTION},
+            {"role": "system", "content": self._instruction},
             *self._history,
             {"role": "user", "content": prompt},
         ]

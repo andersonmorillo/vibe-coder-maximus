@@ -1,17 +1,109 @@
 # voice-cursor
 
-Terminal voice loop on Windows. You talk to **mcp-agent**; Cursor CLI (`agent -p`) runs only when you say **apply**.
+Terminal voice loop on Windows. You talk to **mcp-agent**; Firstmate handles the
+project only when you say **apply**.
 
 ```text
 mic or stdin → mcp-agent (talk) → print + Windows SAPI
-                 ↘ say "apply" → `.voice-cursor/request.md` → Cursor CLI (`agent -p`)
+                 ↘ say "apply" → `.voice-cursor/request.md` → Firstmate inbox
+                                                        ↘ isolated worker
 ```
 
 This is not a GUI. It does not drive the Cursor IDE with Windows-MCP, and it does not use the Python `cursor_sdk.Agent.create` cloud path. Talk uses lastmile-ai [mcp-agent](https://docs.mcp-agent.com/get-started/welcome) (`MCPApp` + `Agent`) locally — not mcp-c / Temporal.
 
-## Install
+## Quick start from WSL
 
-Python 3.11+, Node.js/npm, a microphone, the Cursor CLI (`agent`), and a talk LLM key.
+Use this path when Firstmate is on WSL.
+The voice frontend starts a trusted Cursor primary in tmux, and that primary runs Firstmate's `bin/fm-session-start.sh` setup hook automatically.
+
+Clone the complete voice frontend from GitHub:
+
+```sh
+mkdir -p "$HOME/src"
+git clone https://github.com/andersonmorillo/vibe-coder-maximus.git \
+  "$HOME/src/vibe-coder-maximus"
+cd "$HOME/src/vibe-coder-maximus"
+```
+
+If the folder is already cloned, just run:
+
+```sh
+cd "$HOME/src/vibe-coder-maximus"
+git pull --ff-only
+```
+
+Set the local paths.
+`FIRSTMATE_ROOT` must point to your Firstmate checkout.
+`PROJECT_ROOT` is the project Firstmate will work on; for this example it is
+the cloned voice frontend:
+
+```sh
+export VOICE_CURSOR_ROOT="$HOME/src/vibe-coder-maximus"
+export FIRSTMATE_ROOT=/path/to/firstmate
+export PROJECT_ROOT="$VOICE_CURSOR_ROOT"
+```
+
+Install the local prerequisites once:
+
+```sh
+sudo apt update
+sudo apt install -y python3-pip python3-venv tmux nodejs npm
+cd "$VOICE_CURSOR_ROOT"
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[voice,talk]"
+```
+
+Create the talk configuration and add your key:
+
+```sh
+mkdir -p ~/.voice-cursor
+cp .env.example ~/.voice-cursor/.env
+nano ~/.voice-cursor/.env
+```
+
+Set `OPENROUTER_API_KEY` in that file.
+Do not commit the file.
+
+Authenticate the Cursor primary:
+
+```sh
+cursor-agent login
+cursor-agent status
+```
+
+Run a text-only session first:
+
+```sh
+cd "$VOICE_CURSOR_ROOT"
+. .venv/bin/activate
+python -m voice_cursor start \
+  --firstmate-root "$FIRSTMATE_ROOT" \
+  --cwd "$PROJECT_ROOT" \
+  --text \
+  --no-tts
+```
+
+The command prints the tmux session to attach to.
+The target project must be registered in the Firstmate home before applying work.
+If Firstmate already has its own clone of the project, set `PROJECT_ROOT` to
+that clone instead.
+At the voice-cursor prompt, describe the change, then type `apply`.
+Firstmate receives the request through its inbox and handles the project in its normal isolated workflow.
+
+Test the installation without an API key, microphone, or Cursor session:
+
+```sh
+cd "$VOICE_CURSOR_ROOT"
+. .venv/bin/activate
+printf 'say hello\napply\nquit\n' | python -m voice_cursor start --fake --text --no-tts
+```
+
+## Native Windows notes
+
+The Firstmate engine runs in WSL.
+Native Windows can still run the legacy direct-Cursor mode with `--engine cursor`.
+Install the Python extras in PowerShell:
 
 ```powershell
 python -m pip install -e ".[dev,voice,talk]"
@@ -19,16 +111,11 @@ agent login
 agent status
 ```
 
-Put the OpenRouter key once in `%USERPROFILE%\.voice-cursor\.env` (the global installer copies your repo `.env` there). That key is used from every project. A `.env` in `--cwd` still wins if present.
+Put the OpenRouter key in `%USERPROFILE%\.voice-cursor\.env`.
+See `.env.example`.
+Do not commit keys.
 
-```
-OPENROUTER_API_KEY=sk-or-v1-...
-OPENROUTER_MODEL=openai/gpt-4o-mini
-```
-
-See `.env.example`. Do not commit keys. Direct `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` still work. `agent login` uses your Cursor account. You can also set `CURSOR_API_KEY` or put that key in `%USERPROFILE%\.cursor\api-key`.
-
-Windows install for the CLI if `agent` is missing:
+Install the Cursor CLI if `agent` is missing:
 
 ```powershell
 irm 'https://cursor.com/install?win32=true' | iex
@@ -58,62 +145,29 @@ python -m pytest -q
 
 Force it inside the full suite with `--run-mic` or `$env:VOICE_CURSOR_REAL_MIC = "1"`.
 
-## Use from anywhere
+## Configuration and alternatives
 
-The command talks and, on apply, edits **whatever folder you point it at**, not this repo. Either `cd` into a project first, or pass `--cwd`.
+The quick-start command is the recommended Firstmate workflow.
+`VOICE_CURSOR_FIRSTMATE_ROOT` can provide the checkout instead of
+`--firstmate-root`.
+`VOICE_CURSOR_FIRSTMATE_HOME` or `FM_HOME` can select a separate operational
+home.
+`--firstmate-session` overrides the generated tmux session name.
+`--primary-model` passes a model to the Cursor primary.
+The project must already be registered in the Firstmate home.
+Apply turns enqueue the request with `bin/fm-inbox.sh note`.
+The voice frontend does not edit the project directly.
 
-Put `voice-cursor` on your PATH once (writes `%USERPROFILE%\.local\bin\voice-cursor.cmd`):
+For the old direct Cursor behavior, opt in explicitly:
 
-```powershell
-cd C:\Users\nosre\desarrollos\vibe-coder-maximus
-powershell -File scripts\install-global.ps1
-```
-
-Open a **new** terminal, then from any directory:
-
-```powershell
-cd C:\path\to\your\project
-voice-cursor start --wake-word "hey cursor"
-```
-
-The wrapper always runs this repo's venv. Talk keys come from `%USERPROFILE%\.voice-cursor\.env`, not from each project. `--cwd` (default: the folder you are in) is only the workspace Cursor may edit on apply.
-
-Or stay where you are and name the project:
-
-```powershell
-voice-cursor start --cwd C:\path\to\your\project --wake-word "hey cursor"
-voice-cursor start --text --cwd C:\path\to\your\project
-voice-cursor listen-test --device 6
-voice-cursor doctor
-```
-
-`--cwd` is the folder Cursor may edit on apply. Talk turns do not spawn `agent -p`. Apply turns resume the same Cursor CLI session (`--resume`). Before Cursor runs, the spec is printed and spoken.
-
-## Run a session (from this repo)
-
-Typed fallback:
-
-```powershell
-python -m voice_cursor start --text
-```
-
-Voice:
-
-```powershell
-python -m voice_cursor start
-python -m voice_cursor start --wake-word "hey cursor"
-```
-
-Work in another folder:
-
-```powershell
-python -m voice_cursor start --cwd C:\path\to\project --device 6
-python -m voice_cursor doctor
+```sh
+python -m voice_cursor start --engine cursor --cwd /path/to/project
 ```
 
 Talk replies come from mcp-agent, which can inspect the target repository through
-read-only filesystem MCP tools. Cursor CLI runs only after `apply`; source files
-are not modified during talk turns. Replies are printed and spoken with Windows SAPI.
+read-only filesystem MCP tools.
+Firstmate receives work only after `apply`.
+Source files are not modified during talk turns.
 
 ### Models (three different systems)
 
@@ -124,12 +178,14 @@ Voice-to-text is **not** Cursor. It is [faster-whisper](https://github.com/SYSTR
 | Speech-to-text | Whisper **`base.en`**, **CUDA float16 if a GPU is found**, else CPU int8 | `$env:VOICE_CURSOR_STT_DEVICE = "cpu"` or `"cuda"`; `$env:VOICE_CURSOR_STT_MODEL = "small.en"` |
 | Microphone | system default | `--device N` or `$env:VOICE_CURSOR_MIC_DEVICE = "N"` (`voice-cursor doctor` lists indexes) |
 | Talk | mcp-agent via OpenRouter (OpenAI-compatible) | `.env` `OPENROUTER_API_KEY` / `OPENROUTER_MODEL`; or `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
-| Coding (apply only) | Cursor CLI default model for your account | `agent` / Cursor settings |
+| Coding (apply only) | Firstmate primary using Cursor CLI | `--primary-model` or Cursor settings |
 | Text-to-speech | Windows SAPI (`System.Speech`) | none |
 
 `tiny.en` is faster and sloppier; `small.en` is slower and clearer. Cache: `%USERPROFILE%\.voice-cursor\whisper`.
 
-The session prints a live `you> …` line in the terminal while you speak. After you pause: `talk> (working...)` for conversation, or `cursor> (working...)` after apply.
+The session prints a live `you> …` line in the terminal while you speak. After
+you pause: `talk> (working...)` for conversation, or `firstmate> (working...)`
+after apply.
 
 Dry run (no mcp-agent, no Cursor, no mic):
 
@@ -142,10 +198,10 @@ python -m voice_cursor start --fake --text
 | Input | Action |
 | --- | --- |
 | `stop listening`, `goodbye`, `exit`, `quit` | End the session |
-| `apply`, `applied`, `apply that`, `make the change`, `do it`, `go ahead`, `implement it` | Print/speak the spec, then one Cursor CLI call |
-| `apply rename foo to bar` | Write that instruction into the spec, then Cursor CLI |
+| `apply`, `applied`, `apply that`, `make the change`, `do it`, `go ahead`, `implement it` | Print/speak the spec, then queue it for Firstmate |
+| `apply rename foo to bar` | Write that instruction into the spec, then queue it for Firstmate |
 | `stop` while a run is active | Cancel the current run |
 | `cancel`, `never mind` | Cancel the current run |
 | `be quiet`, `silence` | Stop speech output |
-| anything else | Talk (mcp-agent). Never `agent -p` |
+| anything else | Talk (mcp-agent). Never edit the project directly |
 | Ctrl+C | End the session |

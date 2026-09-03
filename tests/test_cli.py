@@ -46,7 +46,7 @@ def test_missing_cwd_is_one():
 
 def test_missing_agent_cli_is_one(monkeypatch):
     monkeypatch.setattr("voice_cursor.cursor_cli.find_agent_cli", lambda: None)
-    assert main(["start", "--text", "--no-tts"]) == 1
+    assert main(["start", "--engine", "cursor", "--text", "--no-tts"]) == 1
 
 
 def test_missing_talk_key_is_one(monkeypatch, tmp_path):
@@ -65,7 +65,20 @@ def test_missing_talk_key_is_one(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("VOICE_CURSOR_HOME", str(tmp_path / "no-home"))
-    assert main(["start", "--text", "--no-tts", "--cwd", str(tmp_path)]) == 1
+    assert (
+        main(
+            [
+                "start",
+                "--engine",
+                "cursor",
+                "--text",
+                "--no-tts",
+                "--cwd",
+                str(tmp_path),
+            ]
+        )
+        == 1
+    )
 
 
 def test_parse_cli_json_result_and_session():
@@ -86,3 +99,55 @@ def test_find_agent_cli_override(tmp_path: Path, monkeypatch):
     bin_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("VOICE_CURSOR_AGENT_BIN", str(bin_path))
     assert find_agent_cli() == str(bin_path)
+
+
+def test_firstmate_is_default_coding_engine(tmp_path: Path, monkeypatch):
+    import voice_cursor.cli as cli
+
+    events: list[str] = []
+
+    class FakeFirstmate:
+        apply_message = "Handing to Firstmate."
+        uses_request_text = True
+        startup_message = "started"
+
+        def __init__(self, **kwargs):
+            events.append("configure")
+
+        def start(self):
+            events.append("start")
+
+        def close(self):
+            events.append("close")
+
+    class FakeTalk:
+        def __init__(self, **kwargs):
+            events.append("talk")
+
+        def close(self):
+            events.append("talk-close")
+
+    monkeypatch.setattr(cli, "FirstmateAgent", FakeFirstmate)
+    monkeypatch.setattr("voice_cursor.talk_mcp.McpTalkAgent", FakeTalk)
+    monkeypatch.setattr(
+        cli,
+        "run_session",
+        lambda **kwargs: events.append("run"),
+    )
+
+    assert (
+        main(
+            [
+                "start",
+                "--text",
+                "--no-tts",
+                "--cwd",
+                str(tmp_path),
+                "--firstmate-root",
+                str(tmp_path / "firstmate"),
+            ]
+        )
+        == 0
+    )
+    assert events[:3] == ["configure", "talk", "start"]
+    assert events[-1] == "run"

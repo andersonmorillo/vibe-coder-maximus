@@ -125,11 +125,16 @@ def run_session(
                     heard = listener.next_utterance()
                     continue
                 preview = spec_text if len(spec_text) <= 240 else spec_text[:237] + "..."
+                apply_message = getattr(agent, "apply_message", "Applying.")
                 print(f"apply> {spec_text}", flush=True)
-                speaker.say(f"Applying. {preview}")
-                prompt = APPLY_PROMPT
+                speaker.say(f"{apply_message} {preview}")
+                prompt = (
+                    spec_text
+                    if getattr(agent, "uses_request_text", False)
+                    else APPLY_PROMPT
+                )
                 worker: CodingAgent = agent
-                label = "cursor"
+                label = "firstmate" if getattr(agent, "uses_request_text", False) else "cursor"
             else:
                 prompt = payload
                 worker = talk

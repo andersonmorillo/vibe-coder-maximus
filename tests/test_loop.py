@@ -104,6 +104,25 @@ def test_apply_with_words_writes_spec(tmp_path: Path):
     assert speaker.said == ["Applying. rename foo to bar", "Renamed it."]
 
 
+def test_firstmate_engine_queues_spec_text(tmp_path: Path):
+    class FirstmateFake(FakeAgent):
+        apply_message = "Handing to Firstmate."
+        uses_request_text = True
+
+    talk = FakeAgent()
+    agent = FirstmateFake(replies=["Queued for Firstmate."])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["apply rename foo to bar", "quit"]),
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert agent.prompts == ["rename foo to bar"]
+    assert speaker.said == ["Handing to Firstmate. rename foo to bar", "Queued for Firstmate."]
+
+
 def test_agent_send_error_keeps_listening(tmp_path: Path):
     class Boom:
         def __init__(self) -> None:

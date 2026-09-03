@@ -15,21 +15,24 @@ from voice_cursor.loop import VOICE_INSTRUCTION
 
 
 def find_agent_cli() -> str | None:
-    """Cursor CLI (`agent`), not the Python SDK and not Windows-MCP."""
+    """Find the Cursor CLI used by Firstmate or direct compatibility mode."""
     override = os.environ.get("VOICE_CURSOR_AGENT_BIN", "").strip()
     if override:
         path = Path(override).expanduser()
         if path.is_file():
             return str(path)
-    which = shutil.which("agent")
-    if which:
-        return which
+    for name in ("cursor-agent", "agent"):
+        which = shutil.which(name)
+        if which:
+            return which
     home = Path.home()
     local = os.environ.get("LOCALAPPDATA", "")
     candidates = [
+        home / ".local" / "bin" / "cursor-agent",
         home / ".local" / "bin" / "agent.exe",
         home / ".local" / "bin" / "agent.cmd",
         home / ".local" / "bin" / "agent",
+        home / ".cursor" / "bin" / "cursor-agent",
         home / ".cursor" / "bin" / "agent.exe",
         home / ".cursor" / "bin" / "agent.cmd",
         Path(local) / "cursor-agent" / "agent.exe" if local else None,
@@ -52,11 +55,11 @@ def _launch_argv(binary: str) -> list[str]:
 def install_hint() -> str:
     if sys.platform == "win32":
         return (
-            "voice-cursor: Cursor CLI (`agent`) not found. Install with: "
+            "voice-cursor: Cursor CLI for the Firstmate primary not found. Install with: "
             "irm 'https://cursor.com/install?win32=true' | iex"
         )
     return (
-        "voice-cursor: Cursor CLI (`agent`) not found. Install with: "
+        "voice-cursor: Cursor CLI for the Firstmate primary not found. Install with: "
         "curl https://cursor.com/install -fsS | bash"
     )
 
