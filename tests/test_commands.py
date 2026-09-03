@@ -91,3 +91,31 @@ def test_missing_wake_word_is_ignored():
 
 def test_blank_is_ignored():
     assert classify("   ")[0] is Intent.IGNORE
+
+
+def test_help_status_repeat_clear():
+    assert classify("help")[0] is Intent.HELP
+    assert classify("what can I say")[0] is Intent.HELP
+    assert classify("commands")[0] is Intent.HELP
+    assert classify("status")[0] is Intent.STATUS
+    assert classify("what's the plan")[0] is Intent.STATUS
+    assert classify("repeat")[0] is Intent.REPEAT
+    assert classify("say that again")[0] is Intent.REPEAT
+    assert classify("forget that")[0] is Intent.CLEAR
+    assert classify("scratch that")[0] is Intent.CLEAR
+
+
+def test_scratch_that_cancels_when_running():
+    assert classify("scratch that", run_active=True)[0] is Intent.CANCEL_RUN
+    assert classify("forget that", run_active=True)[0] is Intent.CANCEL_RUN
+
+
+def test_help_me_write_is_still_a_prompt():
+    assert classify("help me write a test")[0] is Intent.PROMPT
+
+
+def test_backchannel_exact_only():
+    for heard in ("yeah", "yes", "ok", "okay", "uh-huh", "got it", "sure"):
+        assert classify(heard)[0] is Intent.BACKCHANNEL, heard
+    assert classify("yes add auth")[0] is Intent.PROMPT
+    assert classify("okay apply")[0] is Intent.PROMPT

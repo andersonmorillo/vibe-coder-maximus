@@ -16,3 +16,14 @@ def test_keeps_short_inline_code():
 def test_empty():
     assert speakable("") == ""
     assert speakable("   ") == ""
+
+
+def test_spoken_preview_flattens_and_caps():
+    from voice_cursor.speakable import spoken_preview
+
+    assert spoken_preview("add a login") == "add a login"
+    assert spoken_preview("a\n\nb") == "a b"
+    long = "x" * 250
+    out = spoken_preview(long, limit=10)
+    assert out == "xxxxxxx..."
+    assert len(out) == 10

@@ -8,10 +8,25 @@ class Intent(Enum):
     STOP_SESSION = "stop_session"
     CANCEL_RUN = "cancel_run"
     QUIET = "quiet"
+    HELP = "help"
+    STATUS = "status"
+    REPEAT = "repeat"
+    CLEAR = "clear"
+    BACKCHANNEL = "backchannel"
     PROMPT = "prompt"
     APPLY = "apply"
     IGNORE = "ignore"
 
+
+GREETING_SPEECH = (
+    "Listening. Talk to plan a change, say apply to hand it off, "
+    "or say help for commands."
+)
+HELP_SPEECH = (
+    "Talk to plan. Say apply to hand it to Firstmate. "
+    "Say status to hear the pending plan, repeat to hear me again, "
+    "forget that to drop the plan, or stop listening to end."
+)
 
 _STOP = frozenset(
     {
@@ -26,6 +41,67 @@ _STOP = frozenset(
 )
 _CANCEL = frozenset({"cancel", "never mind", "nevermind"})
 _QUIET = frozenset({"be quiet", "silence", "shut up", "quiet"})
+_HELP = frozenset(
+    {
+        "help",
+        "what can i say",
+        "what can you do",
+        "commands",
+        "help commands",
+    }
+)
+_STATUS = frozenset(
+    {
+        "status",
+        "what s the plan",
+        "whats the plan",
+        "what is the plan",
+        "where are we",
+        "read the spec",
+        "what s the spec",
+        "whats the spec",
+        "what is the spec",
+    }
+)
+_REPEAT = frozenset(
+    {
+        "repeat",
+        "repeat that",
+        "say that again",
+        "say it again",
+        "what did you say",
+    }
+)
+_CLEAR = frozenset(
+    {
+        "forget that",
+        "clear the plan",
+        "scratch that",
+        "drop the spec",
+        "drop the plan",
+    }
+)
+# Exact only: short ack words must not steal real prompts via fuzzy match.
+_BACKCHANNEL = frozenset(
+    {
+        "yeah",
+        "yes",
+        "yep",
+        "yup",
+        "ok",
+        "okay",
+        "uh huh",
+        "uhhuh",
+        "right",
+        "mm hmm",
+        "mhm",
+        "got it",
+        "cool",
+        "sure",
+        "alright",
+        "all right",
+    }
+)
 # Longest first so "apply that" is not parsed as apply + "that".
 _APPLY = (
     "make the change",
@@ -59,6 +135,10 @@ def _matches(key: str, phrases: frozenset[str] | tuple[str, ...]) -> bool:
     if key in phrases:
         return True
     return any(_close(key, p) for p in phrases)
+
+
+def is_background(intent: Intent) -> bool:
+    return intent in (Intent.IGNORE, Intent.BACKCHANNEL)
 
 
 def strip_wake_word(text: str, wake: str) -> str | None:
@@ -99,6 +179,16 @@ def classify(
         return Intent.STOP_SESSION, payload
     if run_active and _matches(key, _CANCEL):
         return Intent.CANCEL_RUN, payload
+    if _matches(key, _HELP):
+        return Intent.HELP, payload
+    if _matches(key, _STATUS):
+        return Intent.STATUS, payload
+    if _matches(key, _REPEAT):
+        return Intent.REPEAT, payload
+    if _matches(key, _CLEAR):
+        if run_active:
+            return Intent.CANCEL_RUN, payload
+        return Intent.CLEAR, payload
     for phrase in _APPLY:
         if key == phrase or _close(key, phrase):
             return Intent.APPLY, ""
@@ -111,4 +201,6 @@ def classify(
         head in _APPLY_ALIASES or _close(head, "apply")
     ):
         return Intent.APPLY, " ".join(tokens[1:])
+    if key in _BACKCHANNEL:
+        return Intent.BACKCHANNEL, payload
     return Intent.PROMPT, payload

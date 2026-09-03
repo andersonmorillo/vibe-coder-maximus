@@ -4,11 +4,16 @@ import sys
 import time
 from pathlib import Path
 
-from voice_cursor.commands import Intent, classify
+from voice_cursor.commands import (
+    HELP_SPEECH,
+    Intent,
+    classify,
+    is_background,
+)
 from voice_cursor.ports import MISSING, CodingAgent, Listener, Speaker
 from voice_cursor.session import Session
-from voice_cursor.speakable import speakable
-from voice_cursor.spec import read_spec, write_spec
+from voice_cursor.speakable import speakable, spoken_preview
+from voice_cursor.spec import clear_spec, read_spec, write_spec
 
 VOICE_INSTRUCTION = (
     "You are driven by a voice interface. Keep the final assistant message "
@@ -38,11 +43,19 @@ def _playing(speaker: Speaker) -> bool:
     return bool(playing()) if playing else False
 
 
-def _speak(speaker: Speaker, text: str, *, echo: bool = True) -> None:
+def _speak(
+    speaker: Speaker,
+    text: str,
+    *,
+    echo: bool = True,
+    session: Session | None = None,
+) -> None:
     try:
         speaker.say(text, echo=echo)  # type: ignore[call-arg]
     except TypeError:
         speaker.say(text)
+    if session is not None and text:
+        session.last_spoken = text
 
 
 def _reap(run) -> None:
@@ -52,6 +65,16 @@ def _reap(run) -> None:
         run.wait()
     except Exception:
         pass
+
+
+def _barge_in_during(listener: Listener, *, wake_word: str):
+    barge = _poll(listener)
+    if barge is MISSING:
+        return MISSING
+    intent, _ = classify(barge, run_active=True, wake_word=wake_word)
+    if is_background(intent):
+        return MISSING
+    return barge
 
 
 def _barge(barge, *, current, speaker: Speaker, session: Session, wake_word: str):
@@ -64,9 +87,16 @@ def _barge(barge, *, current, speaker: Speaker, session: Session, wake_word: str
     if intent_b is Intent.STOP_SESSION:
         session.stop()
         return _STOP
-    if intent_b in (Intent.CANCEL_RUN, Intent.QUIET, Intent.IGNORE):
+    if intent_b in (Intent.CANCEL_RUN, Intent.QUIET, Intent.IGNORE, Intent.BACKCHANNEL):
         return _LISTEN
     return barge
+
+
+def _status_speech(spec_root: str | Path) -> str:
+    spec_text = read_spec(spec_root)
+    if not spec_text:
+        return "No pending change. Talk to plan one, then say apply."
+    return f"Pending change: {spoken_preview(spec_text)}"
 
 
 def run_session(
@@ -89,7 +119,7 @@ def run_session(
             intent, payload = classify(
                 heard, run_active=session.run_active, wake_word=wake_word
             )
-            if intent is Intent.IGNORE:
+            if is_background(intent):
                 heard = listener.next_utterance()
                 continue
             if intent is Intent.STOP_SESSION:
@@ -112,6 +142,29 @@ def run_session(
                 current = None
                 heard = listener.next_utterance()
                 continue
+            if intent is Intent.HELP:
+                _speak(speaker, HELP_SPEECH, session=session)
+                heard = listener.next_utterance()
+                continue
+            if intent is Intent.STATUS:
+                _speak(speaker, _status_speech(spec_root), session=session)
+                heard = listener.next_utterance()
+                continue
+            if intent is Intent.REPEAT:
+                text = session.last_spoken or "Nothing to repeat."
+                _speak(speaker, text, session=session)
+                heard = listener.next_utterance()
+                continue
+            if intent is Intent.CLEAR:
+                dropped = clear_spec(spec_root)
+                text = (
+                    "Dropped the pending change."
+                    if dropped
+                    else "Nothing to drop."
+                )
+                _speak(speaker, text, session=session)
+                heard = listener.next_utterance()
+                continue
             if current is not None and session.run_active:
                 current.cancel()
                 _reap(current)
@@ -121,13 +174,13 @@ def run_session(
                     write_spec(spec_root, payload)
                 spec_text = read_spec(spec_root)
                 if not spec_text:
-                    speaker.say("Nothing to apply.")
+                    _speak(speaker, "Nothing to apply.", session=session)
                     heard = listener.next_utterance()
                     continue
-                preview = spec_text if len(spec_text) <= 240 else spec_text[:237] + "..."
+                preview = spoken_preview(spec_text)
                 apply_message = getattr(agent, "apply_message", "Applying.")
                 print(f"apply> {spec_text}", flush=True)
-                speaker.say(f"{apply_message} {preview}")
+                _speak(speaker, f"{apply_message} {preview}", session=session)
                 prompt = (
                     spec_text
                     if getattr(agent, "uses_request_text", False)
@@ -153,7 +206,7 @@ def run_session(
                         print(piece, end="", flush=True)
                         streamed = True
                         chunks.append(piece)
-                    barge = _poll(listener)
+                    barge = _barge_in_during(listener, wake_word=wake_word)
                     if barge is not MISSING:
                         break
                 if streamed:
@@ -165,11 +218,11 @@ def run_session(
                 speaker.stop()
                 session.end_turn()
                 current = None
-                speaker.say("The agent hit an error. Try again.")
+                _speak(speaker, "The agent hit an error. Try again.", session=session)
                 heard = listener.next_utterance()
                 continue
             if barge is MISSING:
-                barge = _poll(listener)
+                barge = _barge_in_during(listener, wake_word=wake_word)
             if barge is not MISSING:
                 nxt = _barge(
                     barge,
@@ -193,11 +246,11 @@ def run_session(
                 speaker.stop()
                 session.end_turn()
                 current = None
-                speaker.say("The agent hit an error. Try again.")
+                _speak(speaker, "The agent hit an error. Try again.", session=session)
                 heard = listener.next_utterance()
                 continue
             if getattr(current, "status", "") == "error":
-                speaker.say("The agent hit an error. Try again.")
+                _speak(speaker, "The agent hit an error. Try again.", session=session)
                 session.end_turn()
                 current = None
                 heard = listener.next_utterance()
@@ -206,10 +259,10 @@ def run_session(
             session.begin_speak()
             spoken = speakable(final)
             if spoken:
-                _speak(speaker, spoken, echo=not streamed)
+                _speak(speaker, spoken, echo=not streamed, session=session)
             speak_barge = MISSING
             while _playing(speaker):
-                speak_barge = _poll(listener)
+                speak_barge = _barge_in_during(listener, wake_word=wake_word)
                 if speak_barge is not MISSING:
                     break
                 time.sleep(0.05)

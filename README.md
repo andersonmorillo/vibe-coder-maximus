@@ -198,6 +198,11 @@ python -m voice_cursor start --fake --text
 | Input | Action |
 | --- | --- |
 | `stop listening`, `goodbye`, `exit`, `quit` | End the session |
+| `help`, `what can I say`, `commands` | Speak the command map |
+| `status`, `what's the plan`, `read the spec` | Speak the pending change spec |
+| `repeat`, `say that again` | Re-speak the last reply |
+| `forget that`, `scratch that`, `clear the plan` | Drop the local spec (or cancel if a run is active) |
+| `yeah`, `ok`, `uh-huh`, `got it` | Backchannel: ignored, does not talk or abort a run |
 | `apply`, `applied`, `apply that`, `make the change`, `do it`, `go ahead`, `implement it` | Print/speak the spec, then queue it for Firstmate |
 | `apply rename foo to bar` | Write that instruction into the spec, then queue it for Firstmate |
 | `stop` while a run is active | Cancel the current run |
@@ -205,3 +210,5 @@ python -m voice_cursor start --fake --text
 | `be quiet`, `silence` | Stop speech output |
 | anything else | Talk (mcp-agent). Never edit the project directly |
 | Ctrl+C | End the session |
+
+See [docs/interaction-plan.md](docs/interaction-plan.md) for the research mapping and later ideas.

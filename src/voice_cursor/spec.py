@@ -24,3 +24,11 @@ def write_spec(root: str | Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.strip() + "\n", encoding="utf-8")
     return path
+
+
+def clear_spec(root: str | Path) -> bool:
+    path = spec_file(root)
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True

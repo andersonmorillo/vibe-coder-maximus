@@ -13,6 +13,7 @@ class Phase(Enum):
 class Session:
     def __init__(self) -> None:
         self.phase = Phase.LISTENING
+        self.last_spoken = ""
 
     @property
     def run_active(self) -> bool:

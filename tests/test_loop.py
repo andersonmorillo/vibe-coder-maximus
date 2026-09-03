@@ -340,3 +340,150 @@ def test_barge_in_during_speech_cancels_without_waiting(tmp_path: Path):
     assert agent.prompts == []
     assert speaker.said == ["long spoken answer"]
     assert speaker.stops >= 1
+
+
+def test_help_does_not_call_talk(tmp_path: Path):
+    from voice_cursor.commands import HELP_SPEECH
+
+    talk = FakeAgent(replies=["should not run"])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["help", "quit"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == []
+    assert speaker.said == [HELP_SPEECH]
+
+
+def test_status_reads_pending_spec(tmp_path: Path):
+    write_spec(tmp_path, "add a login endpoint")
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["status", "quit"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=FakeAgent(),
+        spec_root=tmp_path,
+    )
+    assert speaker.said == ["Pending change: add a login endpoint"]
+
+
+def test_status_without_spec(tmp_path: Path):
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["what's the plan", "quit"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=FakeAgent(),
+        spec_root=tmp_path,
+    )
+    assert speaker.said == ["No pending change. Talk to plan one, then say apply."]
+
+
+def test_repeat_respeaks_last_reply(tmp_path: Path):
+    talk = FakeAgent(replies=["Saved. Say apply."])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["create a login endpoint", "repeat", "quit"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["create a login endpoint"]
+    assert speaker.said == ["Saved. Say apply.", "Saved. Say apply."]
+
+
+def test_forget_that_clears_spec(tmp_path: Path):
+    write_spec(tmp_path, "add a login endpoint")
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["forget that", "quit"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=FakeAgent(),
+        spec_root=tmp_path,
+    )
+    assert read_spec(tmp_path) == ""
+    assert speaker.said == ["Dropped the pending change."]
+
+
+def test_yeah_is_not_a_talk_turn(tmp_path: Path):
+    talk = FakeAgent(replies=["should not run"])
+    speaker = RecordingSpeaker()
+    _run(
+        listener=ListListener(["yeah", "quit"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == []
+    assert speaker.said == []
+
+
+class _TwoShotRun:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def iter_text(self):
+        yield "part one "
+        yield "part two"
+
+    def wait(self) -> str:
+        return "part one part two"
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class _TwoShotAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+        self.closed = False
+        self.run: _TwoShotRun | None = None
+
+    def send(self, prompt: str) -> _TwoShotRun:
+        self.prompts.append(prompt)
+        self.run = _TwoShotRun()
+        return self.run
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_backchannel_during_run_does_not_abort(tmp_path: Path):
+    talk = _TwoShotAgent()
+    speaker = RecordingSpeaker()
+    _run(
+        listener=_PollListener(lines=["first task", "quit"], polls=["yeah"]),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["first task"]
+    assert talk.run is not None and not talk.run.cancelled
+    assert speaker.said == ["part one part two"]
+
+
+def test_wake_miss_during_run_does_not_abort(tmp_path: Path):
+    talk = _TwoShotAgent()
+    speaker = RecordingSpeaker()
+    _run(
+        listener=_PollListener(
+            lines=["hey cursor first task", "hey cursor quit"],
+            polls=["side conversation"],
+        ),
+        speaker=speaker,
+        agent=FakeAgent(),
+        talk=talk,
+        spec_root=tmp_path,
+        wake_word="hey cursor",
+    )
+    assert talk.prompts == ["first task"]
+    assert talk.run is not None and not talk.run.cancelled
+    assert speaker.said == ["part one part two"]

@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+from voice_cursor.commands import GREETING_SPEECH
 from voice_cursor.firstmate import FirstmateAgent
 from voice_cursor.io import StdinListener, TeeSpeaker
 from voice_cursor.loop import run_session
@@ -127,7 +128,7 @@ def _boot_status(cwd: Path, *, fake: bool, engine: str) -> None:
     print(
         f"voice-cursor: session in {cwd}  "
         f"(talk: mcp-agent; apply: {apply_target}; "
-        "Ctrl+C or 'stop listening' to end)",
+        "say help for commands; Ctrl+C or 'stop listening' to end)",
         flush=True,
     )
 
@@ -269,6 +270,7 @@ def start_session(args: argparse.Namespace) -> int:
         print(f"voice-cursor: {agent.startup_message}", flush=True)
 
     _boot_status(cwd, fake=bool(args.fake), engine=engine)
+    speaker.say(GREETING_SPEECH)
     try:
         run_session(
             listener=listener,

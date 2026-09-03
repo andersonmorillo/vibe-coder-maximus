@@ -18,6 +18,14 @@ def _keep_inline(match: re.Match[str]) -> str:
     return inner
 
 
+def spoken_preview(text: str, limit: int = 240) -> str:
+    """One flattened line for status / receipts; empty input stays empty."""
+    one = " ".join(text.split())
+    if len(one) <= limit:
+        return one
+    return one[: limit - 3].rstrip() + "..."
+
+
 def speakable(text: str) -> str:
     """Strip markdown and code so TTS does not read fences aloud."""
     if not text:

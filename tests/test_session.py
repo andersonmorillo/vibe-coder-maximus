@@ -4,6 +4,7 @@ from voice_cursor.session import Phase, Session
 def test_starts_listening():
     s = Session()
     assert s.phase is Phase.LISTENING
+    assert s.last_spoken == ""
     assert s.is_open
     assert not s.run_active
 
