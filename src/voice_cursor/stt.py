@@ -14,6 +14,7 @@ SAMPLE_RATE = 16000
 # WhisperX-style: find speech relative to noise, then transcribe.
 # A fixed 0.012 RMS gate missed this laptop mic (peaks ~0.002–0.006).
 NOISE_RATIO = 4.0
+INTERRUPT_RATIO = 6.0
 NOISE_FLOOR = 0.0008
 HOT_BLOCKS = 2
 SILENCE_TAIL_S = 1.0
@@ -47,6 +48,33 @@ def speech_gate(noise_rms: float) -> float:
     if fixed is not None:
         return fixed
     return max(float(noise_rms) * NOISE_RATIO, NOISE_FLOOR)
+
+
+def interrupt_ratio() -> float:
+    raw = os.environ.get("VOICE_CURSOR_INTERRUPT_RATIO", "").strip()
+    return float(raw) if raw else INTERRUPT_RATIO
+
+
+def interrupt_threshold() -> float | None:
+    raw = os.environ.get("VOICE_CURSOR_INTERRUPT_THRESHOLD", "").strip()
+    if not raw:
+        return None
+    return float(raw)
+
+
+def interrupt_speech_gate(noise_rms: float) -> float:
+    """Higher gate while TTS plays so speaker bleed is ignored."""
+    fixed = interrupt_threshold()
+    if fixed is not None:
+        return fixed
+    return max(float(noise_rms) * interrupt_ratio(), NOISE_FLOOR * 2)
+
+
+def capture_gate(noise_rms: float) -> float:
+    """Normal listen gate, or the stricter interrupt gate during TTS."""
+    if mic_muted():
+        return interrupt_speech_gate(noise_rms)
+    return speech_gate(noise_rms)
 
 
 def update_noise(noise_rms: float, rms: float) -> float:
@@ -266,7 +294,7 @@ class WhisperListener:
     def _warmup(self) -> None:
         get_whisper_model()
 
-    def _finish_utterance(self, stream, prefix: list, *, gate: float) -> object:
+    def _finish_utterance(self, stream, prefix: list, *, noise: float) -> object:
         import numpy as np
 
         block_n = int(SAMPLE_RATE * BLOCK_S)
@@ -276,6 +304,7 @@ class WhisperListener:
         last_partial = 0.0
         tail = silence_tail_s()
         partial_thread: threading.Thread | None = None
+        noise_rms = float(noise)
         echo_live("…")
 
         def _kick_partial(snap) -> None:
@@ -295,16 +324,13 @@ class WhisperListener:
         while time.time() - started < MAX_UTTERANCE_S and not self._stop.is_set():
             data, _ = stream.read(block_n)
             mono = data[:, 0] if data.ndim > 1 else data
-            if mic_muted():
-                silent += BLOCK_S
-                if silent >= tail:
-                    break
-                continue
             chunks.append(mono.copy())
             rms = float((mono**2).mean() ** 0.5)
-            if rms > gate:
+            active_gate = capture_gate(noise_rms)
+            if rms > active_gate:
                 silent = 0.0
             else:
+                noise_rms = update_noise(noise_rms, rms)
                 silent += BLOCK_S
                 if silent >= tail:
                     break
@@ -352,21 +378,17 @@ class WhisperListener:
                 mono = data[:, 0] if data.ndim > 1 else data
                 tail.append(mono.copy())
                 rms = float((mono**2).mean() ** 0.5)
-                gate = speech_gate(noise)
+                gate = capture_gate(noise)
                 if rms > gate:
                     run += 1
                 else:
                     noise = update_noise(noise, rms)
                     run = 0
                     continue
-                if mic_muted():
-                    run = 0
-                    tail.clear()
-                    continue
                 if run < need:
                     continue
                 run = 0
-                audio = self._finish_utterance(stream, list(tail), gate=gate)
+                audio = self._finish_utterance(stream, list(tail), noise=noise)
                 tail.clear()
                 if audio is None:
                     continue

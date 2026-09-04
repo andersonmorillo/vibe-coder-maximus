@@ -59,10 +59,9 @@ npx voice-cursor --text --no-tts
 Inside this repo only, `npm run agent -- --text --no-tts` is the same command.
 You do not add a `package.json` script to the other project.
 
-`--cwd` defaults to the directory you ran the command in. `--engine cursor`
-is the default for this launcher, so **apply** edits that folder in place.
-Pass `--engine firstmate` only when you want Firstmate's isolated workflow
-instead (that project must already be registered with Firstmate).
+`--cwd` defaults to the directory you ran the command in. **Apply** uses
+Firstmate by default (queues the change through its isolated workflow).
+Pass `--engine cursor` when you want the legacy direct Cursor CLI path instead.
 
 Use `--text --no-tts` for a text-only session. The global installer includes
 microphone support for the normal command without those flags.
@@ -111,13 +110,10 @@ Then, from any registered project:
 
 ```sh
 cd /path/to/project
-voice-cursor --engine firstmate --text --no-tts
+voice-cursor --text --no-tts
 ```
 
-The project path is still the current directory; the Firstmate checkout is
-only the engine that receives the apply request. Firstmate handles the project
-through its normal isolated workflow, so the project must already be
-registered in that Firstmate home.
+The project must already be registered with Firstmate for apply to work.
 
 If the package was installed from npm rather than from inside a Firstmate
 checkout, set the root once in `~/.voice-cursor/.env`:
@@ -185,11 +181,11 @@ Force it inside the full suite with `--run-mic` or `$env:VOICE_CURSOR_REAL_MIC =
 ## Configuration and alternatives
 
 The global `voice-cursor` / `npx voice-cursor` command is the easy path for
-other projects: it defaults to `--engine cursor` and `--cwd` of the current
-directory, so **apply** edits that folder in place.
+other projects: it defaults to `--engine firstmate` and `--cwd` of the current
+directory, so **apply** hands work to Firstmate.
 
 `VOICE_CURSOR_FIRSTMATE_ROOT` can provide the checkout instead of
-`--firstmate-root` when you pass `--engine firstmate`.
+`--firstmate-root` when Firstmate is not auto-discovered.
 `VOICE_CURSOR_FIRSTMATE_HOME` or `FM_HOME` can select a separate operational
 home.
 `--firstmate-session` overrides the generated tmux session name.
@@ -240,8 +236,10 @@ python -m voice_cursor start --fake --text
 | `apply`, `applied`, `apply that`, `make the change`, `do it`, `go ahead`, `implement it` | Print/speak the spec, then queue it for Firstmate |
 | `apply rename foo to bar` | Write that instruction into the spec, then queue it for Firstmate |
 | `stop` while a run is active | Cancel the current run |
+| `stop` while I'm speaking | Stop speech and wait for your next sentence |
 | `cancel`, `never mind` | Cancel the current run |
 | `be quiet`, `silence` | Stop speech output |
+| Enter (keyboard, mic mode) | Stop speech and wait for your next sentence |
 | anything else | Talk (mcp-agent). Never edit the project directly |
 | Ctrl+C | End the session |
 

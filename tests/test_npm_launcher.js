@@ -11,13 +11,13 @@ const {
   findFirstmateRoot,
 } = require("../bin/install-python.js");
 
-test("bare command starts Cursor in the current project", () => {
+test("bare command starts Firstmate in the current project", () => {
   assert.deepEqual(pythonArgs([], "/tmp/proj"), [
     "-m",
     "voice_cursor",
     "start",
     "--engine",
-    "cursor",
+    "firstmate",
     "--cwd",
     "/tmp/proj",
   ]);
@@ -30,9 +30,9 @@ test("extra flags pass through", () => {
 });
 
 test("explicit engine is not overridden", () => {
-  const args = pythonArgs(["--engine", "firstmate"], "/tmp/proj");
-  assert.ok(args.includes("firstmate"));
-  assert.ok(!args.includes("cursor"));
+  const args = pythonArgs(["--engine", "cursor"], "/tmp/proj");
+  assert.ok(args.includes("cursor"));
+  assert.ok(!args.includes("firstmate"));
 });
 
 test("doctor is a passthrough", () => {
@@ -52,7 +52,7 @@ test("explicit start still defaults cwd", () => {
     "voice_cursor",
     "start",
     "--engine",
-    "cursor",
+    "firstmate",
     "--cwd",
     "/work/app",
   ]);

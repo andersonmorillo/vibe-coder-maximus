@@ -20,6 +20,10 @@ class Session:
         return self.phase is Phase.RUNNING
 
     @property
+    def speaking(self) -> bool:
+        return self.phase is Phase.SPEAKING
+
+    @property
     def is_open(self) -> bool:
         return self.phase is not Phase.STOPPING
 

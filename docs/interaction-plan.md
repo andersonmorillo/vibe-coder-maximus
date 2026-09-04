@@ -8,7 +8,7 @@ spoken commands and the existing talk-then-apply split. No kanban, no AG-UI clie
 - Talk vs apply: mcp-agent plans and may write `.voice-cursor/request.md`; Firstmate
   only runs after `apply`.
 - Start / stop / cancel / quiet, including `stop` canceling an in-flight run.
-- Barge-in: a new prompt while working cancels the current run and steers.
+- Barge-in during agent work; **stop / be quiet / Enter during TTS** stops speech and waits for your next sentence (higher mic gate while speaking).
 - Wake-word gating and a Whisper near-miss list so `apple` does not mean apply.
 - Speakable replies (strip fences) and a live `you>` transcript line.
 

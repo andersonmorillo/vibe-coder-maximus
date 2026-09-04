@@ -342,6 +342,110 @@ def test_barge_in_during_speech_cancels_without_waiting(tmp_path: Path):
     assert speaker.stops >= 1
 
 
+class _BriefSpeaker:
+    """Simulates short TTS: playing for a few poll ticks, then finishes."""
+
+    def __init__(self, on_say) -> None:
+        self.said: list[str] = []
+        self.stops = 0
+        self._playing = False
+        self._ticks = 0
+        self._on_say = on_say
+
+    def say(self, text: str) -> None:
+        self.said.append(text)
+        self._playing = True
+        self._ticks = 2
+        self._on_say()
+
+    def is_playing(self) -> bool:
+        if not self._playing:
+            return False
+        if self._ticks <= 0:
+            self._playing = False
+            return False
+        self._ticks -= 1
+        return True
+
+    def stop(self) -> None:
+        self.stops += 1
+        self._playing = False
+
+
+def test_prompt_during_speech_does_not_interrupt(tmp_path: Path):
+    listener = _PollListener(lines=["first task", "quit"], polls=[])
+    speaker = _BriefSpeaker(on_say=lambda: listener._polls.append("now add JWT"))
+    talk = FakeAgent(replies=["long spoken answer"])
+    agent = FakeAgent()
+    _run(
+        listener=listener,
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["first task"]
+    assert agent.prompts == []
+    assert speaker.said == ["long spoken answer"]
+    assert "JWT" not in " ".join(talk.prompts)
+
+
+def test_stop_during_speech_waits_for_next_sentence(tmp_path: Path):
+    listener = _PollListener(
+        lines=["first task", "add JWT auth", "quit"],
+        polls=[],
+    )
+    speaker = _StickySpeaker(arm=lambda: listener._polls.append("stop"))
+    talk = FakeAgent(replies=["long spoken answer", "noted JWT"])
+    agent = FakeAgent()
+    _run(
+        listener=listener,
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+    )
+    assert talk.prompts == ["first task", "add JWT auth"]
+    assert speaker.stops >= 1
+
+
+class _KeyInterrupt:
+    def __init__(self) -> None:
+        self._armed = False
+        self.closed = False
+
+    def arm(self) -> None:
+        self._armed = True
+
+    def poll(self) -> bool:
+        if self._armed:
+            self._armed = False
+            return True
+        return False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_enter_during_speech_waits_for_next_sentence(tmp_path: Path):
+    listener = _PollListener(lines=["first task", "add JWT auth", "quit"], polls=[])
+    key = _KeyInterrupt()
+    speaker = _StickySpeaker(arm=key.arm)
+    talk = FakeAgent(replies=["long spoken answer", "noted JWT"])
+    agent = FakeAgent()
+    run_session(
+        listener=listener,
+        speaker=speaker,
+        agent=agent,
+        talk=talk,
+        spec_root=tmp_path,
+        interrupt_key=key,
+    )
+    assert talk.prompts == ["first task", "add JWT auth"]
+    assert speaker.stops >= 1
+    assert key.closed
+
+
 def test_help_does_not_call_talk(tmp_path: Path):
     from voice_cursor.commands import HELP_SPEECH
 

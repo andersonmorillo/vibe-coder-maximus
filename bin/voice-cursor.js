@@ -29,7 +29,7 @@ function hasFlag(args, flag) {
 
 function startFlags(args, cwd) {
   const out = [];
-  if (!hasFlag(args, "--engine")) out.push("--engine", "cursor");
+  if (!hasFlag(args, "--engine")) out.push("--engine", "firstmate");
   if (!hasFlag(args, "--cwd")) out.push("--cwd", cwd);
   out.push(...args);
   return out;

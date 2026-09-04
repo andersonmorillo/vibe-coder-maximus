@@ -119,6 +119,19 @@ def test_hot_needed_defaults_to_two(monkeypatch):
     assert hot_needed() == 2
 
 
+def test_interrupt_gate_is_stricter_than_listen_gate():
+    noise = 0.001
+    assert stt.interrupt_speech_gate(noise) > stt.speech_gate(noise)
+
+
+def test_capture_gate_uses_interrupt_while_speaking(monkeypatch):
+    monkeypatch.setattr(stt, "mic_muted", lambda: True)
+    noise = 0.001
+    assert stt.capture_gate(noise) == stt.interrupt_speech_gate(noise)
+    monkeypatch.setattr(stt, "mic_muted", lambda: False)
+    assert stt.capture_gate(noise) == stt.speech_gate(noise)
+
+
 def test_listen_once_times_out_when_silent(monkeypatch):
     class SilentListener:
         _error = None

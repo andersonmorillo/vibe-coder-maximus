@@ -9,6 +9,7 @@ from voice_cursor.commands import (
     Intent,
     classify,
     is_background,
+    is_speech_interrupt,
 )
 from voice_cursor.ports import MISSING, CodingAgent, Listener, Speaker
 from voice_cursor.session import Session
@@ -67,18 +68,60 @@ def _reap(run) -> None:
         pass
 
 
-def _barge_in_during(listener: Listener, *, wake_word: str):
+def _barge_in_during(
+    listener: Listener, *, wake_word: str, speaking: bool = False
+):
     barge = _poll(listener)
     if barge is MISSING:
         return MISSING
-    intent, _ = classify(barge, run_active=True, wake_word=wake_word)
+    intent, _ = classify(
+        barge,
+        run_active=True,
+        speaking=speaking,
+        wake_word=wake_word,
+    )
     if is_background(intent):
+        return MISSING
+    if speaking and intent is Intent.PROMPT:
+        return MISSING
+    if speaking and not is_speech_interrupt(intent) and intent is not Intent.STOP_SESSION:
         return MISSING
     return barge
 
 
-def _barge(barge, *, current, speaker: Speaker, session: Session, wake_word: str):
-    intent_b, _ = classify(barge, run_active=True, wake_word=wake_word)
+def _stop_speech_and_listen(
+    *,
+    speaker: Speaker,
+    session: Session,
+    current,
+) -> object:
+    if current is not None:
+        current.cancel()
+        _reap(current)
+    speaker.stop()
+    session.end_turn()
+    return _LISTEN
+
+
+def _barge(
+    barge,
+    *,
+    current,
+    speaker: Speaker,
+    session: Session,
+    wake_word: str,
+    speaking: bool = False,
+):
+    intent_b, _ = classify(
+        barge,
+        run_active=True,
+        speaking=speaking,
+        wake_word=wake_word,
+    )
+    if speaking and is_speech_interrupt(intent_b):
+        return _stop_speech_and_listen(
+            speaker=speaker, session=session, current=current
+        )
     if current is not None:
         current.cancel()
         _reap(current)
@@ -107,17 +150,25 @@ def run_session(
     talk: CodingAgent,
     spec_root: str | Path = ".",
     wake_word: str = "",
+    interrupt_key: object | None = None,
 ) -> None:
     session = Session()
     current = None
     heard = listener.next_utterance()
+    if interrupt_key is None and getattr(listener, "echoes_input", False):
+        from voice_cursor.interrupt_key import InterruptKey
+
+        interrupt_key = InterruptKey()
     try:
         while session.is_open:
             if heard is None:
                 session.stop()
                 break
             intent, payload = classify(
-                heard, run_active=session.run_active, wake_word=wake_word
+                heard,
+                run_active=session.run_active,
+                speaking=session.speaking,
+                wake_word=wake_word,
             )
             if is_background(intent):
                 heard = listener.next_utterance()
@@ -261,11 +312,24 @@ def run_session(
             if spoken:
                 _speak(speaker, spoken, echo=not streamed, session=session)
             speak_barge = MISSING
+            key_poll = getattr(interrupt_key, "poll", None)
+            interrupted_for_listen = False
             while _playing(speaker):
-                speak_barge = _barge_in_during(listener, wake_word=wake_word)
+                if key_poll is not None and key_poll():
+                    speaker.stop()
+                    session.end_turn()
+                    current = None
+                    interrupted_for_listen = True
+                    break
+                speak_barge = _barge_in_during(
+                    listener, wake_word=wake_word, speaking=True
+                )
                 if speak_barge is not MISSING:
                     break
                 time.sleep(0.05)
+            if interrupted_for_listen:
+                heard = listener.next_utterance()
+                continue
             if speak_barge is not MISSING:
                 nxt = _barge(
                     speak_barge,
@@ -273,6 +337,7 @@ def run_session(
                     speaker=speaker,
                     session=session,
                     wake_word=wake_word,
+                    speaking=True,
                 )
                 current = None
                 if nxt is _STOP:
@@ -290,5 +355,8 @@ def run_session(
         closer = getattr(listener, "close", None)
         if closer is not None:
             closer()
+        key_close = getattr(interrupt_key, "close", None)
+        if key_close is not None:
+            key_close()
         agent.close()
         talk.close()

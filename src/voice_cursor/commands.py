@@ -20,12 +20,13 @@ class Intent(Enum):
 
 GREETING_SPEECH = (
     "Listening. Talk to plan a change, say apply to hand it off, "
-    "or say help for commands."
+    "say stop to interrupt me, or say help for commands."
 )
 HELP_SPEECH = (
     "Talk to plan. Say apply to hand it to Firstmate. "
     "Say status to hear the pending plan, repeat to hear me again, "
-    "forget that to drop the plan, or stop listening to end."
+    "forget that to drop the plan, say stop or be quiet to interrupt me, "
+    "or stop listening to end."
 )
 
 _STOP = frozenset(
@@ -141,6 +142,11 @@ def is_background(intent: Intent) -> bool:
     return intent in (Intent.IGNORE, Intent.BACKCHANNEL)
 
 
+def is_speech_interrupt(intent: Intent) -> bool:
+    """Commands that stop TTS without starting a new talk turn."""
+    return intent in (Intent.CANCEL_RUN, Intent.QUIET)
+
+
 def strip_wake_word(text: str, wake: str) -> str | None:
     """Return text after a position-0 wake prefix, or None if the prefix is absent."""
     wake = normalize(wake)
@@ -158,7 +164,11 @@ def strip_wake_word(text: str, wake: str) -> str | None:
 
 
 def classify(
-    text: str, *, run_active: bool = False, wake_word: str = ""
+    text: str,
+    *,
+    run_active: bool = False,
+    speaking: bool = False,
+    wake_word: str = "",
 ) -> tuple[Intent, str]:
     payload = text.strip()
     if wake_word:
@@ -174,9 +184,11 @@ def classify(
     if _matches(key, _QUIET):
         return Intent.QUIET, payload
     if key == "stop" or _close(key, "stop"):
-        if run_active:
+        if run_active or speaking:
             return Intent.CANCEL_RUN, payload
         return Intent.STOP_SESSION, payload
+    if speaking and _matches(key, _CANCEL):
+        return Intent.CANCEL_RUN, payload
     if run_active and _matches(key, _CANCEL):
         return Intent.CANCEL_RUN, payload
     if _matches(key, _HELP):

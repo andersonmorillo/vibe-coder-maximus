@@ -17,6 +17,16 @@ def test_stop_while_running_cancels_run():
     assert intent is Intent.CANCEL_RUN
 
 
+def test_stop_while_speaking_cancels_speech_not_session():
+    intent, _ = classify("stop", speaking=True)
+    assert intent is Intent.CANCEL_RUN
+
+
+def test_cancel_while_speaking():
+    intent, _ = classify("never mind", speaking=True)
+    assert intent is Intent.CANCEL_RUN
+
+
 def test_cancel_only_when_running():
     assert classify("cancel", run_active=False)[0] is Intent.PROMPT
     assert classify("never mind", run_active=True)[0] is Intent.CANCEL_RUN
