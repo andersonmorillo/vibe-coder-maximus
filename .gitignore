@@ -4,6 +4,9 @@ venv/
 env/
 ENV/
 
+# npm
+node_modules/
+
 # Python bytecode and caches
 __pycache__/
 *.py[cod]

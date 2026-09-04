@@ -6,12 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "voice-cursor"
 version = "0.1.0"
 description = "Terminal voice loop around the Cursor coding agent"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = []
 
 [project.optional-dependencies]
 cursor = ["cursor-sdk"]
-voice = ["faster-whisper", "sounddevice", "numpy"]
+voice = ["whisperx>=3.8.6,<3.9", "sounddevice", "numpy"]
 talk = ["mcp-agent[openai,anthropic]", "mcp<2"]
 dev = ["pytest"]
 

@@ -1,95 +1,132 @@
 # voice-cursor
 
-Terminal voice loop on Windows. You talk to **mcp-agent**; Firstmate handles the
-project only when you say **apply**.
+Terminal voice loop. You talk to **mcp-agent**; **apply** edits the project
+you launched from (Cursor CLI by default).
 
 ```text
 mic or stdin → mcp-agent (talk) → print + Windows SAPI
-                 ↘ say "apply" → `.voice-cursor/request.md` → Firstmate inbox
-                                                        ↘ isolated worker
+                 ↘ say "apply" → Cursor CLI in the current project
 ```
 
-This is not a GUI. It does not drive the Cursor IDE with Windows-MCP, and it does not use the Python `cursor_sdk.Agent.create` cloud path. Talk uses lastmile-ai [mcp-agent](https://docs.mcp-agent.com/get-started/welcome) (`MCPApp` + `Agent`) locally — not mcp-c / Temporal.
+Install once, then run it from any repo. This is not a GUI, not Windows-MCP,
+and not the Python `cursor_sdk.Agent.create` cloud path. Talk uses lastmile-ai
+[mcp-agent](https://docs.mcp-agent.com/get-started/welcome) (`MCPApp` + `Agent`)
+locally — not mcp-c / Temporal.
 
-## Quick start from WSL
+## Global install (any project)
 
-Use this path when Firstmate is on WSL.
-The voice frontend starts a trusted Cursor primary in tmux, and that primary runs Firstmate's `bin/fm-session-start.sh` setup hook automatically.
-
-Clone the complete voice frontend from GitHub:
+One-time setup from this repo. Requires Node 18+ and Python 3.11–3.13
+(Python 3.12 is recommended because WhisperX does not support 3.14 yet).
+Installs to `~/.local` so you do not need sudo:
 
 ```sh
-mkdir -p "$HOME/src"
-git clone https://github.com/andersonmorillo/vibe-coder-maximus.git \
-  "$HOME/src/vibe-coder-maximus"
-cd "$HOME/src/vibe-coder-maximus"
+cd /path/to/vibe-coder-maximus
+bash scripts/install-global.sh
 ```
 
-If the folder is already cloned, just run:
+Equivalent:
 
 ```sh
-cd "$HOME/src/vibe-coder-maximus"
-git pull --ff-only
+npm install -g --prefix "$HOME/.local" .
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Set the local paths.
-`FIRSTMATE_ROOT` must point to your Firstmate checkout.
-`PROJECT_ROOT` is the project Firstmate will work on; for this example it is
-the cloned voice frontend:
-
-```sh
-export VOICE_CURSOR_ROOT="$HOME/src/vibe-coder-maximus"
-export FIRSTMATE_ROOT=/path/to/firstmate
-export PROJECT_ROOT="$VOICE_CURSOR_ROOT"
-```
-
-Install the local prerequisites once:
-
-```sh
-sudo apt update
-sudo apt install -y python3-pip python3-venv tmux nodejs npm
-cd "$VOICE_CURSOR_ROOT"
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e ".[voice,talk]"
-```
-
-Create the talk configuration and add your key:
+That puts `voice-cursor` on your PATH and installs the Python talk and
+microphone runtimes into this package's `.venv`. Add your key once:
 
 ```sh
 mkdir -p ~/.voice-cursor
 cp .env.example ~/.voice-cursor/.env
-nano ~/.voice-cursor/.env
+nano ~/.voice-cursor/.env   # set OPENROUTER_API_KEY
 ```
 
-Set `OPENROUTER_API_KEY` in that file.
-Do not commit the file.
+Authenticate the Cursor CLI once (`cursor-agent login` on WSL, `agent login`
+on native Windows).
 
-Authenticate the Cursor primary:
+Then, from **any** project directory:
 
 ```sh
-cursor-agent login
-cursor-agent status
+cd /path/to/the/other/project
+voice-cursor --text --no-tts
 ```
 
-Run a text-only session first:
+or:
 
 ```sh
-cd "$VOICE_CURSOR_ROOT"
-. .venv/bin/activate
-python -m voice_cursor start \
-  --firstmate-root "$FIRSTMATE_ROOT" \
-  --cwd "$PROJECT_ROOT" \
-  --text \
-  --no-tts
+npx voice-cursor --text --no-tts
 ```
 
-The command prints the tmux session to attach to.
-The target project must be registered in the Firstmate home before applying work.
-If Firstmate already has its own clone of the project, set `PROJECT_ROOT` to
-that clone instead.
+Inside this repo only, `npm run agent -- --text --no-tts` is the same command.
+You do not add a `package.json` script to the other project.
+
+`--cwd` defaults to the directory you ran the command in. `--engine cursor`
+is the default for this launcher, so **apply** edits that folder in place.
+Pass `--engine firstmate` only when you want Firstmate's isolated workflow
+instead (that project must already be registered with Firstmate).
+
+Use `--text --no-tts` for a text-only session. The global installer includes
+microphone support for the normal command without those flags.
+
+On native Windows, `scripts/install-global.ps1` is the older PATH shim; npm
+is the supported global launcher.
+
+## Publish to npm
+
+The package name `voice-cursor` is currently unclaimed. Before publishing:
+
+```sh
+npm login
+npm test
+npm publish --access public
+```
+
+Afterward, users can install it globally with `npm install -g voice-cursor` or
+run it with `npx voice-cursor`. A published install cannot guess an unrelated
+Firstmate checkout; set `VOICE_CURSOR_FIRSTMATE_ROOT` once in
+`~/.voice-cursor/.env` when using the Firstmate engine.
+
+## Firstmate engine from WSL
+
+The global installer automatically records the Firstmate checkout when it is
+run from inside that checkout, including this layout:
+
+```text
+/path/to/firstmate/
+├── AGENTS.md
+└── vibe-coder-maximus/
+```
+
+From this repository:
+
+```sh
+sudo apt update
+sudo apt install -y python3-pip python3-venv tmux nodejs npm
+cd /path/to/firstmate/vibe-coder-maximus
+bash scripts/install-global.sh
+```
+
+The installer stores `VOICE_CURSOR_FIRSTMATE_ROOT` in
+`~/.voice-cursor/.env`. It does not overwrite a root you already configured.
+Then, from any registered project:
+
+```sh
+cd /path/to/project
+voice-cursor --engine firstmate --text --no-tts
+```
+
+The project path is still the current directory; the Firstmate checkout is
+only the engine that receives the apply request. Firstmate handles the project
+through its normal isolated workflow, so the project must already be
+registered in that Firstmate home.
+
+If the package was installed from npm rather than from inside a Firstmate
+checkout, set the root once in `~/.voice-cursor/.env`:
+
+```sh
+VOICE_CURSOR_FIRSTMATE_ROOT=/path/to/firstmate
+```
+
 At the voice-cursor prompt, describe the change, then type `apply`.
-Firstmate receives the request through its inbox and handles the project in its normal isolated workflow.
 
 Test the installation without an API key, microphone, or Cursor session:
 
@@ -147,35 +184,32 @@ Force it inside the full suite with `--run-mic` or `$env:VOICE_CURSOR_REAL_MIC =
 
 ## Configuration and alternatives
 
-The quick-start command is the recommended Firstmate workflow.
+The global `voice-cursor` / `npx voice-cursor` command is the easy path for
+other projects: it defaults to `--engine cursor` and `--cwd` of the current
+directory, so **apply** edits that folder in place.
+
 `VOICE_CURSOR_FIRSTMATE_ROOT` can provide the checkout instead of
-`--firstmate-root`.
+`--firstmate-root` when you pass `--engine firstmate`.
 `VOICE_CURSOR_FIRSTMATE_HOME` or `FM_HOME` can select a separate operational
 home.
 `--firstmate-session` overrides the generated tmux session name.
 `--primary-model` passes a model to the Cursor primary.
-The project must already be registered in the Firstmate home.
-Apply turns enqueue the request with `bin/fm-inbox.sh note`.
-The voice frontend does not edit the project directly.
-
-For the old direct Cursor behavior, opt in explicitly:
-
-```sh
-python -m voice_cursor start --engine cursor --cwd /path/to/project
-```
+A Firstmate apply still requires that project to be registered with Firstmate;
+that path queues the request with `bin/fm-inbox.sh note` and does not edit
+the launch folder directly.
 
 Talk replies come from mcp-agent, which can inspect the target repository through
 read-only filesystem MCP tools.
-Firstmate receives work only after `apply`.
 Source files are not modified during talk turns.
 
 ### Models (three different systems)
 
-Voice-to-text is **not** Cursor. It is [faster-whisper](https://github.com/SYSTRAN/faster-whisper) running locally:
+Voice-to-text is **not** Cursor. Listen uses [WhisperX](https://github.com/m-bain/whisperX) on CUDA. [s1-mini](https://huggingface.co/superwhisper/s1-mini) was not selected because it is a transcript cleaner, not a microphone model.
 
 | Piece | Default | Override |
 | --- | --- | --- |
-| Speech-to-text | Whisper **`base.en`**, **CUDA float16 if a GPU is found**, else CPU int8 | `$env:VOICE_CURSOR_STT_DEVICE = "cpu"` or `"cuda"`; `$env:VOICE_CURSOR_STT_MODEL = "small.en"` |
+| Speech-to-text | Whisper **`base.en`**, **CUDA float16 when the CUDA runtime is available**, else CPU int8 | `$env:VOICE_CURSOR_STT_DEVICE = "cpu"` or `"cuda"`; `$env:VOICE_CURSOR_STT_MODEL = "small.en"` |
+| Speech gate | adaptive vs mic noise (not a fixed 0.012 RMS) | `$env:VOICE_CURSOR_STT_THRESHOLD = "0.012"` to force an absolute gate |
 | Microphone | system default | `--device N` or `$env:VOICE_CURSOR_MIC_DEVICE = "N"` (`voice-cursor doctor` lists indexes) |
 | Talk | mcp-agent via OpenRouter (OpenAI-compatible) | `.env` `OPENROUTER_API_KEY` / `OPENROUTER_MODEL`; or `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 | Coding (apply only) | Firstmate primary using Cursor CLI | `--primary-model` or Cursor settings |

@@ -102,6 +102,26 @@ def test_cwd_env_wins_over_global(tmp_path: Path, monkeypatch):
     assert talk_llm()["api_key"] == "sk-or-project"
 
 
+def test_windows_profile_env_fills_empty_linux_home(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("VOICE_CURSOR_HOME", raising=False)
+    linux_home = tmp_path / "linux-home"
+    linux_home.mkdir()
+    (linux_home / ".env").write_text("OPENROUTER_API_KEY=\n", encoding="utf-8")
+    win_user = tmp_path / "win-user"
+    win_vc = win_user / ".voice-cursor"
+    win_vc.mkdir(parents=True)
+    (win_vc / ".env").write_text("OPENROUTER_API_KEY=sk-or-windows\n", encoding="utf-8")
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("USERPROFILE", str(win_user))
+    monkeypatch.setattr("voice_cursor.envfile.voice_cursor_home", lambda: linux_home)
+    load_talk_env(project)
+    assert talk_llm()["api_key"] == "sk-or-windows"
+
+
 def test_placeholder_openrouter_key_is_ignored(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

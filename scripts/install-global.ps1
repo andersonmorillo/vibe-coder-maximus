@@ -1,20 +1,24 @@
-# Put `voice-cursor` on PATH (Windows).
-# Run from the repo:  powershell -File scripts\install-global.ps1
+# Put `voice-cursor` on PATH (Windows cmd / PowerShell).
+# Delegates to the WSL install. Run the bash installer first:
+#   bash scripts/install-global.sh
+# Then:  powershell -File scripts\install-global.ps1
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
-$py = Join-Path $root ".venv\Scripts\python.exe"
-if (-not (Test-Path $py)) {
-    throw "Missing $py. From the repo run: python -m pip install -e `".[voice,talk]`""
-}
 $destDir = Join-Path $env:USERPROFILE ".local\bin"
 New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 $cmdPath = Join-Path $destDir "voice-cursor.cmd"
+$distro = if ($env:WSL_DISTRO_NAME) { $env:WSL_DISTRO_NAME } else { "Ubuntu" }
+$linuxBin = (wsl.exe -d $distro -e bash -c 'printf %s "$HOME/.local/bin/voice-cursor"').Trim()
+if (-not $linuxBin) {
+    throw "Could not resolve the WSL voice-cursor binary. Run bash scripts/install-global.sh first."
+}
 @(
     "@echo off"
     "setlocal"
-    "`"$py`" -m voice_cursor %*"
+    "set WSLENV=USERPROFILE/p:%WSLENV%"
+    "wsl.exe -d $distro --cd `"%CD%`" -e $linuxBin %*"
 ) | Set-Content -Path $cmdPath -Encoding ascii
-Write-Host "Installed $cmdPath"
+Write-Host "Installed $cmdPath -> $distro $linuxBin"
 
 $configDir = Join-Path $env:USERPROFILE ".voice-cursor"
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null

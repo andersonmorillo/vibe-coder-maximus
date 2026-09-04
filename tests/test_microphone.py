@@ -1,4 +1,4 @@
-"""Hardware listen check for the real faster-whisper microphone listener.
+"""Hardware listen check for the real WhisperX microphone listener.
 
 Running this file alone uses the microphone:
 

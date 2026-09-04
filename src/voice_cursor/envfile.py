@@ -50,6 +50,33 @@ def voice_cursor_home() -> Path:
     return Path.home() / ".voice-cursor"
 
 
+def windows_user_profile() -> Path | None:
+    """Windows %USERPROFILE% when this process is WSL-launched from cmd."""
+    raw = os.environ.get("USERPROFILE", "").strip()
+    if raw:
+        direct = Path(raw)
+        if direct.exists():
+            return direct
+        if len(raw) >= 3 and raw[1] == ":":
+            mounted = Path("/mnt") / raw[0].lower() / raw[2:].replace("\\", "/").lstrip("/")
+            if mounted.exists():
+                return mounted
+    users = Path("/mnt/c/Users")
+    if users.is_dir():
+        name = os.environ.get("USER") or Path.home().name
+        mounted = users / name
+        if mounted.exists():
+            return mounted
+    return None
+
+
+def windows_voice_cursor_home() -> Path | None:
+    profile = windows_user_profile()
+    if profile is None:
+        return None
+    return profile / ".voice-cursor"
+
+
 def load_cwd_dotenv(cwd: str | Path) -> None:
     load_talk_env(cwd)
 
@@ -57,10 +84,15 @@ def load_cwd_dotenv(cwd: str | Path) -> None:
 def load_talk_env(cwd: str | Path) -> None:
     """Talk keys from files, not a stale shell env.
 
-    Global ~/.voice-cursor/.env first, then --cwd/.env (wins). Both override
-    inherited OPENROUTER_API_KEY so `voice-cursor start` matches the repo .env.
+    Linux ~/.voice-cursor/.env, then the Windows user file when this was
+    launched from cmd via WSL, then --cwd/.env (wins). Later files override.
+    An explicit VOICE_CURSOR_HOME skips the Windows file so tests stay local.
     """
     load_dotenv(voice_cursor_home() / ".env", override=True)
+    if not os.environ.get("VOICE_CURSOR_HOME", "").strip():
+        win = windows_voice_cursor_home()
+        if win is not None:
+            load_dotenv(win / ".env", override=True)
     load_dotenv(Path(cwd) / ".env", override=True)
 
 

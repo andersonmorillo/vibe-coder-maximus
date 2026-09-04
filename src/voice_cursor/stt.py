@@ -8,15 +8,50 @@ from pathlib import Path
 from queue import Empty, Queue
 
 from voice_cursor.ports import MISSING
+from voice_cursor.win_mic import mic_backend
 
 SAMPLE_RATE = 16000
-SPEECH_RMS = float(os.environ.get("VOICE_CURSOR_STT_THRESHOLD", "0.012"))
-SILENCE_TAIL_S = 2.5
+# WhisperX-style: find speech relative to noise, then transcribe.
+# A fixed 0.012 RMS gate missed this laptop mic (peaks ~0.002–0.006).
+NOISE_RATIO = 4.0
+NOISE_FLOOR = 0.0008
+HOT_BLOCKS = 2
+SILENCE_TAIL_S = 1.0
 MAX_UTTERANCE_S = 30
 MIN_SPEECH_S = 0.4
 MODEL_SIZE = os.environ.get("VOICE_CURSOR_STT_MODEL", "base.en")
 BLOCK_S = 0.05
 PARTIAL_EVERY_S = float(os.environ.get("VOICE_CURSOR_STT_PARTIAL_S", "0.8"))
+
+
+def configured_threshold() -> float | None:
+    raw = os.environ.get("VOICE_CURSOR_STT_THRESHOLD", "").strip()
+    if not raw:
+        return None
+    return float(raw)
+
+
+def hot_needed() -> int:
+    raw = os.environ.get("VOICE_CURSOR_STT_HOT_BLOCKS", "").strip()
+    return int(raw) if raw else HOT_BLOCKS
+
+
+def silence_tail_s() -> float:
+    raw = os.environ.get("VOICE_CURSOR_STT_SILENCE", "").strip()
+    return float(raw) if raw else SILENCE_TAIL_S
+
+
+def speech_gate(noise_rms: float) -> float:
+    """RMS above this counts as speech. Override with VOICE_CURSOR_STT_THRESHOLD."""
+    fixed = configured_threshold()
+    if fixed is not None:
+        return fixed
+    return max(float(noise_rms) * NOISE_RATIO, NOISE_FLOOR)
+
+
+def update_noise(noise_rms: float, rms: float) -> float:
+    return 0.95 * float(noise_rms) + 0.05 * float(rms)
+
 
 _model = None
 _model_lock = threading.Lock()
@@ -30,7 +65,13 @@ def cuda_device_count() -> int:
     try:
         from ctranslate2 import get_cuda_device_count
 
-        return int(get_cuda_device_count() or 0)
+        count = int(get_cuda_device_count() or 0)
+        if count:
+            import ctypes
+
+            library = "cublas64_12.dll" if os.name == "nt" else "libcublas.so.12"
+            ctypes.CDLL(library)
+        return count
     except Exception:
         return 0
 
@@ -76,9 +117,9 @@ def runtime_summary() -> str:
     model = stt_model_name()
     if _resolved is not None:
         device, compute, loaded = _resolved
-        return f"faster-whisper {loaded} on {device} ({compute})"
+        return f"WhisperX {loaded} on {device} ({compute})"
     device, compute = resolve_stt_device()
-    return f"faster-whisper {model} on {device} ({compute})"
+    return f"WhisperX {model} on {device} ({compute})"
 
 
 def mic_muted() -> bool:
@@ -96,7 +137,13 @@ def get_whisper_model():
     global _model, _resolved
     with _model_lock:
         if _model is None:
-            from faster_whisper import WhisperModel
+            try:
+                import whisperx
+            except ImportError as exc:
+                raise RuntimeError(
+                    "WhisperX is required for microphone input. "
+                    'Install with: pip install -e ".[voice]"'
+                ) from exc
 
             size = stt_model_name()
             device, compute = resolve_stt_device()
@@ -106,8 +153,13 @@ def get_whisper_model():
             )
             Path(cache).mkdir(parents=True, exist_ok=True)
             try:
-                _model = WhisperModel(
-                    size, device=device, compute_type=compute, download_root=cache
+                _model = whisperx.load_model(
+                    size,
+                    device=device,
+                    compute_type=compute,
+                    language="en",
+                    vad_method="silero",
+                    download_root=cache,
                 )
                 _resolved = (device, compute, size)
             except Exception:
@@ -117,8 +169,13 @@ def get_whisper_model():
                     f"voice-cursor: Whisper {size} failed on {device}, using CPU int8",
                     flush=True,
                 )
-                _model = WhisperModel(
-                    size, device="cpu", compute_type="int8", download_root=cache
+                _model = whisperx.load_model(
+                    size,
+                    device="cpu",
+                    compute_type="int8",
+                    language="en",
+                    vad_method="silero",
+                    download_root=cache,
                 )
                 _resolved = ("cpu", "int8", size)
         return _model
@@ -127,8 +184,18 @@ def get_whisper_model():
 def transcribe_audio(audio) -> str:
     """Transcribe a float32 mono array at SAMPLE_RATE."""
     with _transcribe_lock:
-        segments, _ = get_whisper_model().transcribe(audio, language="en")
-        return " ".join(s.text.strip() for s in segments).strip()
+        result = get_whisper_model().transcribe(audio, batch_size=1, language="en")
+        segments = result.get("segments", []) if isinstance(result, dict) else result
+        text: list[str] = []
+        for segment in segments:
+            value = (
+                segment.get("text", "")
+                if isinstance(segment, dict)
+                else getattr(segment, "text", "")
+            )
+            if value:
+                text.append(str(value).strip())
+        return " ".join(text).strip()
 
 
 def echo_live(text: str, *, done: bool = False) -> None:
@@ -144,23 +211,25 @@ def echo_live(text: str, *, done: bool = False) -> None:
 
 
 class WhisperListener:
-    """Continuous faster-whisper listener (Hearth listen.py loop, trimmed).
+    """Continuous listener: adaptive VAD, then WhisperX ASR.
 
-    One PortAudio stream for VAD and capture. Nested streams fail on Windows.
-    Source pattern: https://github.com/0pen-Sourcer/Hearth/blob/main/hearth/listen.py
+    One capture stream for VAD and audio. Nested streams fail on Windows.
     """
 
     def __init__(self, wake_word: str = "", device: int | None = None) -> None:
-        import faster_whisper  # noqa: F401 — fail fast if extras missing
-        import sounddevice  # noqa: F401
+        import whisperx  # noqa: F401 — fail fast if extras missing
+
+        if mic_backend() != "windows":
+            import sounddevice  # noqa: F401
 
         self.wake_word = wake_word
-        self.device = mic_device_index(device)
+        self.device = device if mic_backend() == "windows" else mic_device_index(device)
         self.echoes_input = True
         self._q: Queue[str | None] = Queue()
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._error: str | None = None
+        self._capture = None
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -186,13 +255,18 @@ class WhisperListener:
 
     def close(self) -> None:
         self._stop.set()
+        capture = self._capture
+        if capture is not None:
+            closer = getattr(capture, "close", None)
+            if closer is not None:
+                closer()
         self._q.put(None)
         self._thread.join(timeout=2)
 
     def _warmup(self) -> None:
         get_whisper_model()
 
-    def _finish_utterance(self, stream, prefix: list) -> object:
+    def _finish_utterance(self, stream, prefix: list, *, gate: float) -> object:
         import numpy as np
 
         block_n = int(SAMPLE_RATE * BLOCK_S)
@@ -200,6 +274,7 @@ class WhisperListener:
         silent = 0.0
         started = time.time()
         last_partial = 0.0
+        tail = silence_tail_s()
         partial_thread: threading.Thread | None = None
         echo_live("…")
 
@@ -222,16 +297,16 @@ class WhisperListener:
             mono = data[:, 0] if data.ndim > 1 else data
             if mic_muted():
                 silent += BLOCK_S
-                if silent >= SILENCE_TAIL_S:
+                if silent >= tail:
                     break
                 continue
             chunks.append(mono.copy())
             rms = float((mono**2).mean() ** 0.5)
-            if rms > SPEECH_RMS:
+            if rms > gate:
                 silent = 0.0
             else:
                 silent += BLOCK_S
-                if silent >= SILENCE_TAIL_S:
+                if silent >= tail:
                     break
             now = time.time()
             if now - last_partial >= PARTIAL_EVERY_S:
@@ -251,8 +326,13 @@ class WhisperListener:
         return audio
 
     def _loop(self) -> None:
+        stream_cm = None
+        stream = None
         try:
             self._warmup()
+            stream_cm = open_mic_stream(self.device)
+            stream = stream_cm.__enter__()
+            self._capture = stream_cm
         except Exception as exc:
             self._error = str(exc)
             self._q.put(None)
@@ -260,56 +340,88 @@ class WhisperListener:
             return
         finally:
             self._ready.set()
-        import sounddevice as sd
 
         block_n = int(SAMPLE_RATE * BLOCK_S)
         run = 0
         tail: deque = deque(maxlen=8)
+        noise = NOISE_FLOOR
+        need = hot_needed()
         try:
-            with sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=1,
-                dtype="float32",
-                blocksize=block_n,
-                device=self.device,
-            ) as stream:
-                while not self._stop.is_set():
-                    data, _ = stream.read(block_n)
-                    mono = data[:, 0] if data.ndim > 1 else data
-                    tail.append(mono.copy())
-                    rms = float((mono**2).mean() ** 0.5)
-                    if rms > SPEECH_RMS:
-                        run += 1
-                    else:
-                        run = 0
-                        continue
-                    if mic_muted():
-                        run = 0
-                        tail.clear()
-                        continue
-                    if run < 4:
-                        continue
+            while not self._stop.is_set():
+                data, _ = stream.read(block_n)
+                mono = data[:, 0] if data.ndim > 1 else data
+                tail.append(mono.copy())
+                rms = float((mono**2).mean() ** 0.5)
+                gate = speech_gate(noise)
+                if rms > gate:
+                    run += 1
+                else:
+                    noise = update_noise(noise, rms)
                     run = 0
-                    audio = self._finish_utterance(stream, list(tail))
+                    continue
+                if mic_muted():
+                    run = 0
                     tail.clear()
-                    if audio is None:
-                        continue
-                    text = transcribe_audio(audio)
-                    if text:
-                        echo_live(text, done=True)
-                        self._q.put(text)
+                    continue
+                if run < need:
+                    continue
+                run = 0
+                audio = self._finish_utterance(stream, list(tail), gate=gate)
+                tail.clear()
+                if audio is None:
+                    continue
+                text = transcribe_audio(audio)
+                if text:
+                    echo_live(text, done=True)
+                    self._q.put(text)
         except Exception as exc:
-            print(f"voice-cursor: STT loop ended ({exc})")
+            if not self._stop.is_set():
+                print(f"voice-cursor: STT loop ended ({exc})")
             self._q.put(None)
+        finally:
+            self._capture = None
+            if stream_cm is not None:
+                stream_cm.__exit__(None, None, None)
+
+
+def open_mic_stream(device: int | None):
+    if mic_backend() == "windows":
+        from voice_cursor.win_mic import WindowsFfmpegMic
+
+        return WindowsFfmpegMic(device)
+    import sounddevice as sd
+
+    block_n = int(SAMPLE_RATE * BLOCK_S)
+    return sd.InputStream(
+        samplerate=SAMPLE_RATE,
+        channels=1,
+        dtype="float32",
+        blocksize=block_n,
+        device=mic_device_index(device),
+    )
 
 
 def describe_input_devices(selected: int | None = None) -> str:
+    if mic_backend() == "windows":
+        from voice_cursor.win_mic import describe_windows_devices
+
+        return describe_windows_devices(selected)
     import sounddevice as sd
+    from voice_cursor.win_mic import running_in_wsl, windows_ffmpeg
 
     default = sd.default.device
     default_in = default[0] if isinstance(default, (list, tuple)) else default
     pick = mic_device_index(selected)
     lines: list[str] = []
+    if running_in_wsl():
+        hint = (
+            "install ffmpeg on Windows (winget install Gyan.FFmpeg)"
+            if not windows_ffmpeg()
+            else "unset VOICE_CURSOR_MIC=linux"
+        )
+        lines.append(
+            f"  (WSL Pulse/RDP is not the PC mic. {hint} or use --text)"
+        )
     for i, device in enumerate(sd.query_devices()):
         if int(device["max_input_channels"] or 0) <= 0:
             continue

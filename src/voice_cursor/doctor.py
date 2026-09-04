@@ -21,6 +21,7 @@ from voice_cursor.firstmate import (
     resolve_firstmate_root,
 )
 from voice_cursor.stt import cuda_device_count, resolve_stt_device, runtime_summary, stt_model_name
+from voice_cursor.win_mic import mic_backend
 
 
 def _ping_openrouter(api_key: str, base: str) -> str:
@@ -80,6 +81,7 @@ def doctor_lines(cwd: str | Path) -> list[str]:
         )
         lines.append(f"firstmate session: {session}")
     mic = os.environ.get("VOICE_CURSOR_MIC_DEVICE", "").strip() or "default"
+    lines.append(f"mic capture: {mic_backend()}")
     lines.append(f"mic device: {mic}")
     try:
         from voice_cursor.stt import describe_input_devices

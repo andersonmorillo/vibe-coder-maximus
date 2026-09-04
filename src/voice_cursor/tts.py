@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import threading
 
 _lock = threading.Lock()
 _speaking = 0
+_active_speaker: SapiSpeaker | None = None
 
 
 def is_speaking() -> bool:
+    """True only while TTS is actually playing. Poll so mute cannot stick."""
+    speaker = _active_speaker
+    if speaker is not None:
+        return speaker.is_playing()
     return _speaking > 0
 
 
@@ -37,6 +43,12 @@ def _sapi_command(text: str) -> str:
     )
 
 
+def _powershell_bin() -> str | None:
+    if sys.platform == "win32":
+        return shutil.which("powershell") or shutil.which("powershell.exe")
+    return shutil.which("powershell.exe")
+
+
 class SapiSpeaker:
     """Windows SAPI via PowerShell. say() is non-blocking; stop() kills the child."""
 
@@ -48,14 +60,17 @@ class SapiSpeaker:
         self.stop()
         if not text.strip():
             return
-        if sys.platform != "win32":
+        powershell = _powershell_bin()
+        if not powershell:
             print(f"cursor> {text}")
             return
         self._proc = subprocess.Popen(
-            ["powershell", "-NoProfile", "-Command", _sapi_command(text)],
+            [powershell, "-NoProfile", "-Command", _sapi_command(text)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        global _active_speaker
+        _active_speaker = self
         _inc()
         self._counted = True
 

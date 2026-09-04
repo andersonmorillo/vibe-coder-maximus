@@ -42,7 +42,11 @@ def resolve_firstmate_root(
     *,
     cwd: str | Path | None = None,
 ) -> Path:
-    configured = _configured_path(root, "VOICE_CURSOR_FIRSTMATE_ROOT")
+    configured = _configured_path(
+        root,
+        "VOICE_CURSOR_FIRSTMATE_ROOT",
+        "FIRSTMATE_ROOT",
+    )
     if configured:
         resolved = Path(configured).expanduser().resolve()
     else:
@@ -57,7 +61,8 @@ def resolve_firstmate_root(
         )
         raise RuntimeError(
             f"not a Firstmate checkout: {resolved} (missing {missing}). "
-            "Set --firstmate-root or VOICE_CURSOR_FIRSTMATE_ROOT."
+            "Set --firstmate-root, VOICE_CURSOR_FIRSTMATE_ROOT, "
+            "or FIRSTMATE_ROOT."
         )
     return resolved
 
@@ -89,6 +94,32 @@ def primary_session_name(root: Path, home: Path, configured: str = "") -> str:
 def _command_detail(proc) -> str:
     text = (getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "").strip()
     return text.splitlines()[-1] if text else "the command returned an error"
+
+
+def apply_inbox_body(project: Path, spec: str) -> str:
+    return (
+        "This is a voice-cursor apply. Spawn or steer a worker for this "
+        "project. Do not edit the launch folder from the voice process.\n"
+        f"\nProject: {project.name}\n"
+        f"Workspace: {project}\n"
+        f"\n{spec.strip()}\n"
+    )
+
+
+def _script_argv(script: Path, *args: str) -> list[str]:
+    command = [str(script), *args]
+    if not os.access(script, os.X_OK):
+        command.insert(0, shutil.which("bash") or "bash")
+    return command
+
+
+def _launch_looks_owned(detail: str) -> bool:
+    lower = detail.lower()
+    return (
+        "held by live harness" in lower
+        or "duplicate session" in lower
+        or "already owned" in lower
+    )
 
 
 class FirstmateRun:
@@ -159,27 +190,49 @@ class FirstmateAgent:
             command.extend(["--model", self.model])
         return command
 
-    def start(self) -> None:
-        if self._started:
-            return
-        target = [self._tmux, "has-session", "-t", self.session]
-        existing = subprocess.run(
-            target,
+    def _ready(self, message: str) -> None:
+        self._started = True
+        self.startup_message = message
+
+    def _run(self, command: list[str], **kwargs):
+        return subprocess.run(
+            command,
             cwd=str(self.root),
             env=self._env,
             capture_output=True,
             text=True,
             check=False,
+            **kwargs,
+        )
+
+    def _fleet_owned(self) -> bool:
+        lock = self.root / "bin" / "fm-lock.sh"
+        if not lock.is_file():
+            return False
+        status = self._run(_script_argv(lock, "status"))
+        return "held by live harness" in (status.stdout or "")
+
+    def start(self) -> None:
+        if self._started:
+            return
+        existing = self._run(
+            [self._tmux, "has-session", "-t", self.session]
         )
         if existing.returncode == 0:
-            self._started = True
-            self.startup_message = (
+            self._ready(
                 f"using existing Firstmate primary in tmux session {self.session}; "
                 f"attach with: tmux attach -t {self.session}"
             )
             return
+        if self._fleet_owned():
+            self._ready(
+                "Firstmate is already owned by another session; "
+                "requests will be queued in the inbox for that session. "
+                "Not starting a second primary."
+            )
+            return
 
-        launch = subprocess.run(
+        launch = self._run(
             [
                 self._tmux,
                 "new-session",
@@ -190,19 +243,21 @@ class FirstmateAgent:
                 str(self.root),
                 "--",
                 *self.primary_command,
-            ],
-            cwd=str(self.root),
-            env=self._env,
-            capture_output=True,
-            text=True,
-            check=False,
+            ]
         )
         if launch.returncode != 0:
+            detail = _command_detail(launch)
+            if self._fleet_owned() or _launch_looks_owned(detail):
+                self._ready(
+                    f"could not launch a Firstmate primary ({detail}); "
+                    "requests will be queued in the inbox for the existing session. "
+                    "Not starting a second primary."
+                )
+                return
             raise RuntimeError(
-                f"could not launch the Firstmate primary: {_command_detail(launch)}"
+                f"could not launch the Firstmate primary: {detail}"
             )
-        self._started = True
-        self.startup_message = (
+        self._ready(
             f"Firstmate primary started in tmux session {self.session}; "
             f"attach with: tmux attach -t {self.session}"
         )
@@ -210,15 +265,9 @@ class FirstmateAgent:
     def send(self, prompt: str) -> FirstmateRun:
         if not self._started:
             raise RuntimeError("Firstmate primary has not been started")
-        request = (
-            f"Project: {self._project.name}\n"
-            f"Workspace: {self._project}\n\n"
-            f"{prompt.strip()}"
-        )
+        request = apply_inbox_body(self._project, prompt)
         inbox = self.root / "bin" / "fm-inbox.sh"
-        command = [str(inbox), "note", "-"]
-        if not os.access(inbox, os.X_OK):
-            command.insert(0, shutil.which("bash") or "bash")
+        command = _script_argv(inbox, "note", "-")
         try:
             queued = subprocess.run(
                 command,

@@ -1,0 +1,34 @@
+{
+  "name": "voice-cursor",
+  "version": "0.1.0",
+  "description": "Global launcher for the voice-cursor terminal agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andersonmorillo/vibe-coder-maximus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/andersonmorillo/vibe-coder-maximus/issues"
+  },
+  "homepage": "https://github.com/andersonmorillo/vibe-coder-maximus#readme",
+  "bin": {
+    "voice-cursor": "bin/voice-cursor.js"
+  },
+  "files": [
+    "bin",
+    "src/voice_cursor/*.py",
+    "pyproject.toml",
+    ".env.example",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node bin/install-python.js",
+    "agent": "node bin/voice-cursor.js",
+    "test": "npm run test:launcher",
+    "test:launcher": "node --test tests/test_npm_launcher.js",
+    "prepublishOnly": "npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

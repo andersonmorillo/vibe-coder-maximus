@@ -1,0 +1,8 @@
+tests/
+docs/
+scripts/
+.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/

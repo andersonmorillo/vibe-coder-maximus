@@ -28,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         "--device",
         type=int,
         default=None,
-        help="microphone device index (see printed list)",
+        help="microphone index (Windows mic when running in WSL)",
     )
     doctor = sub.add_parser(
         "doctor",
@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         "--device",
         type=int,
         default=None,
-        help="microphone device index (see listen-test / doctor)",
+        help="microphone index (Windows mic when running in WSL; see doctor)",
     )
     start.add_argument(
         "--fake",
